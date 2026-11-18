@@ -44,6 +44,7 @@ async function main() {
     ['SHOPEE_01', 'Shopee Seller 01', ChannelType.SHOPEE],
     ['SHOPEE_02', 'Shopee Seller 02', ChannelType.SHOPEE],
     ['SHOPEE_03', 'Shopee Seller 03', ChannelType.SHOPEE],
+    ['POS_01', 'Cửa hàng trung tâm', ChannelType.OFFLINE_STORE],
   ];
   for (const [code, name, type] of channels) {
     await prisma.salesChannelAccount.upsert({
@@ -83,6 +84,40 @@ async function main() {
       where: { warehouseId_variantId: { warehouseId: warehouse.id, variantId: variant.id } },
       update: { onHand: item.stock, reorderPoint: item.reorder, safetyStock: item.safety },
       create: { warehouseId: warehouse.id, variantId: variant.id, onHand: item.stock, reorderPoint: item.reorder, safetyStock: item.safety },
+    });
+  }
+
+  const seededChannels = await prisma.salesChannelAccount.findMany({ where: { organizationId: organization.id } });
+  const seededVariants = await prisma.productVariant.findMany({ where: { sku: { in: sampleProducts.map((item) => item.sku) } } });
+  const channelByCode = new Map(seededChannels.map((item) => [item.code, item]));
+  const variantBySku = new Map(seededVariants.map((item) => [item.sku, item]));
+  const sampleOrders = [
+    { number: 'DEMO-1001', channel: 'TIKTOK_01', sku: 'AT-BASIC-DEN-M', status: 'DELIVERED', days: 1 },
+    { number: 'DEMO-1002', channel: 'SHOPEE_01', sku: 'AT-BASIC-TRANG-L', status: 'DELIVERED', days: 2 },
+    { number: 'DEMO-1003', channel: 'TIKTOK_03', sku: 'QJ-SLIM-XANH-30', status: 'CANCELLED', days: 3 },
+    { number: 'DEMO-1004', channel: 'SHOPEE_03', sku: 'TDC-DEN-01', status: 'RETURNED', days: 4 },
+    { number: 'DEMO-1005', channel: 'POS_01', sku: 'AT-BASIC-TRANG-L', status: 'DELIVERED', days: 0 },
+    { number: 'DEMO-1006', channel: 'TIKTOK_02', sku: 'TDC-DEN-01', status: 'CONFIRMED', days: 0 },
+  ] as const;
+
+  for (const item of sampleOrders) {
+    const existing = await prisma.salesOrder.findUnique({ where: { orderNumber: item.number } });
+    if (existing) continue;
+    const channel = channelByCode.get(item.channel)!;
+    const variant = variantBySku.get(item.sku)!;
+    await prisma.salesOrder.create({
+      data: {
+        orderNumber: item.number,
+        channelAccountId: channel.id,
+        warehouseId: warehouse.id,
+        status: item.status,
+        subtotal: variant.salePrice,
+        total: variant.salePrice,
+        orderedAt: new Date(Date.now() - item.days * 86_400_000),
+        items: { create: { variantId: variant.id, quantity: 1, unitPrice: variant.salePrice } },
+        ...(item.status === 'CANCELLED' ? { afterSales: { create: { type: 'CANCELLATION', reasonCode: 'CUSTOMER_CHANGED_MIND', responsibleParty: 'CUSTOMER', status: 'COMPLETED' } } } : {}),
+        ...(item.status === 'RETURNED' ? { afterSales: { create: { type: 'RETURN', reasonCode: 'SIZE_NOT_FIT', responsibleParty: 'CUSTOMER', status: 'COMPLETED' } } } : {}),
+      },
     });
   }
 }

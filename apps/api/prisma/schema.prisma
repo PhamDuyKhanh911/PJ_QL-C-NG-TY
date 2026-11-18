@@ -137,6 +137,7 @@ model Warehouse {
   branch   Branch @relation(fields: [branchId], references: [id])
   balances InventoryBalance[]
   transactions InventoryTransaction[]
+  orders   SalesOrder[]
   @@unique([branchId, code])
 }
 
@@ -222,6 +223,7 @@ model SalesOrder {
   id               String @id @default(cuid())
   orderNumber      String @unique
   channelAccountId String
+  warehouseId      String?
   customerId       String?
   externalOrderId  String?
   status           OrderStatus
@@ -231,6 +233,7 @@ model SalesOrder {
   orderedAt        DateTime
   createdAt        DateTime @default(now())
   channelAccount   SalesChannelAccount @relation(fields: [channelAccountId], references: [id])
+  warehouse        Warehouse? @relation(fields: [warehouseId], references: [id])
   customer         Customer? @relation(fields: [customerId], references: [id])
   items            SalesOrderItem[]
   afterSales       AfterSaleRequest[]
