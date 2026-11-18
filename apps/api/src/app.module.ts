@@ -13,6 +13,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { CustomersModule } from './customers/customers.module';
 import { ChannelsModule } from './channels/channels.module';
 import { AfterSalesModule } from './after-sales/after-sales.module';
+import { ReportsModule } from './reports/reports.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { AfterSalesModule } from './after-sales/after-sales.module';
     CustomersModule,
     ChannelsModule,
     AfterSalesModule,
+    ReportsModule,
   ],
   controllers: [HealthController],
 })
