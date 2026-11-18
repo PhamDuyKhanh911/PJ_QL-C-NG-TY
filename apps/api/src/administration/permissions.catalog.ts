@@ -16,4 +16,7 @@ export const PERMISSION_CATALOG = [
   { code: 'customers.read', group: 'CSKH', name: 'Xem hồ sơ khách hàng' },
   { code: 'channels.read', group: 'Kênh bán', name: 'Xem trạng thái kênh bán' },
   { code: 'channels.sync', group: 'Kênh bán', name: 'Thực hiện đồng bộ tồn kho' },
+  { code: 'after_sales.read', group: 'Hậu mãi', name: 'Xem yêu cầu hủy hoàn đổi trả' },
+  { code: 'after_sales.manage', group: 'Hậu mãi', name: 'Tạo và xử lý yêu cầu hậu mãi' },
+  { code: 'after_sales.receive', group: 'Hậu mãi', name: 'Xác nhận hàng hoàn đã về kho' },
 ] as const;

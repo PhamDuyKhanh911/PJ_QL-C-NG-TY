@@ -39,9 +39,9 @@ async function main() {
   });
 
   const defaultRoles = [
-    { code: 'ONLINE_MANAGER', name: 'Quản lý bán hàng online', permissions: ['organization.read', 'catalog.read', 'inventory.read', 'sales.read', 'sales.create', 'sales.cancel', 'reports.sales', 'conversations.read', 'conversations.reply', 'customers.read', 'channels.read', 'channels.sync'] },
-    { code: 'WAREHOUSE_STAFF', name: 'Nhân viên kho', permissions: ['catalog.read', 'inventory.read', 'inventory.adjust', 'sales.read'] },
-    { code: 'CUSTOMER_SERVICE', name: 'Nhân viên chăm sóc khách hàng', permissions: ['sales.read', 'conversations.read', 'conversations.reply', 'customers.read'] },
+    { code: 'ONLINE_MANAGER', name: 'Quản lý bán hàng online', permissions: ['organization.read', 'catalog.read', 'inventory.read', 'sales.read', 'sales.create', 'sales.cancel', 'reports.sales', 'conversations.read', 'conversations.reply', 'customers.read', 'channels.read', 'channels.sync', 'after_sales.read', 'after_sales.manage'] },
+    { code: 'WAREHOUSE_STAFF', name: 'Nhân viên kho', permissions: ['catalog.read', 'inventory.read', 'inventory.adjust', 'sales.read', 'after_sales.read', 'after_sales.receive'] },
+    { code: 'CUSTOMER_SERVICE', name: 'Nhân viên chăm sóc khách hàng', permissions: ['sales.read', 'conversations.read', 'conversations.reply', 'customers.read', 'after_sales.read', 'after_sales.manage'] },
     { code: 'SALES_STAFF', name: 'Nhân viên bán hàng', permissions: ['catalog.read', 'inventory.read', 'sales.read', 'sales.create'] },
     { code: 'REPORT_VIEWER', name: 'Nhân viên báo cáo', permissions: ['organization.read', 'inventory.read', 'sales.read', 'reports.sales'] },
   ];
