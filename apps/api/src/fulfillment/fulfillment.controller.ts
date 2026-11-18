@@ -12,5 +12,6 @@ import { FulfillmentService } from './fulfillment.service';
 export class FulfillmentController {
   constructor(private readonly fulfillment: FulfillmentService) {}
   @Get('orders') @RequirePermissions('fulfillment.read') list(@CurrentUser() user: AuthenticatedUser) { return this.fulfillment.list(user.organizationId); }
+  @Get('handlers') @RequirePermissions('sales.read') handlers(@CurrentUser() user: AuthenticatedUser) { return this.fulfillment.handlers(user.organizationId); }
   @Post('orders/:id/dispatch') @RequirePermissions('fulfillment.dispatch') dispatch(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() input: FulfillmentActionDto) { return this.fulfillment.dispatch(user.organizationId, user.id, id, input); }
 }

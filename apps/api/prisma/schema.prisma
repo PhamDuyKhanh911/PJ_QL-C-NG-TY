@@ -316,6 +316,8 @@ model SalesOrder {
   recipientPhone   String?
   recipientAddress String?
   recipientNote    String?
+  responsibleUserId String?
+  responsibilityAssignedAt DateTime?
   orderedAt        DateTime
   createdAt        DateTime @default(now())
   channelAccount   SalesChannelAccount @relation(fields: [channelAccountId], references: [id])
@@ -334,6 +336,7 @@ model OrderFulfillmentEvent {
   fromStatus    OrderStatus
   toStatus      OrderStatus
   performedById String
+  responsibleUserId String?
   carrierName   String?
   trackingCode  String?
   note          String?

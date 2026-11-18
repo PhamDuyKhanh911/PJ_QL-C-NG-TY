@@ -14,6 +14,7 @@ export class CreateOrderDto {
   @IsOptional() @IsString() @MinLength(8) recipientPhone?: string;
   @IsOptional() @IsString() @MinLength(3) recipientAddress?: string;
   @IsOptional() @IsString() recipientNote?: string;
+  @IsOptional() @IsString() responsibleUserId?: string;
   @IsOptional() @IsNumber() @Min(0) discount = 0;
   @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => CreateOrderItemDto)
   items!: CreateOrderItemDto[];
