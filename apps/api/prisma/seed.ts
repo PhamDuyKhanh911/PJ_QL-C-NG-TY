@@ -39,11 +39,11 @@ async function main() {
   });
 
   const defaultRoles = [
-    { code: 'ONLINE_MANAGER', name: 'Quản lý bán hàng online', permissions: ['organization.read', 'catalog.read', 'inventory.read', 'sales.read', 'sales.create', 'sales.cancel', 'reports.sales', 'conversations.read', 'conversations.reply', 'conversations.close_sale', 'customers.read', 'channels.read', 'channels.sync', 'after_sales.read', 'after_sales.manage', 'purchasing.read', 'fulfillment.read'] },
+    { code: 'ONLINE_MANAGER', name: 'Quản lý bán hàng online', permissions: ['organization.read', 'catalog.read', 'inventory.read', 'sales.read', 'sales.create', 'sales.cancel', 'reports.sales', 'conversations.read', 'conversations.reply', 'conversations.close_sale', 'customers.read', 'channels.read', 'channels.sync', 'after_sales.read', 'after_sales.manage', 'purchasing.read', 'fulfillment.read', 'reconciliation.read', 'reconciliation.sync'] },
     { code: 'WAREHOUSE_STAFF', name: 'Nhân viên kho', permissions: ['catalog.read', 'inventory.read', 'inventory.adjust', 'inventory.inspect_returns', 'sales.read', 'after_sales.read', 'after_sales.receive', 'purchasing.read', 'purchasing.receive', 'fulfillment.read', 'fulfillment.dispatch'] },
     { code: 'CUSTOMER_SERVICE', name: 'Nhân viên chăm sóc khách hàng', permissions: ['sales.read', 'reports.sales', 'conversations.read', 'conversations.reply', 'conversations.close_sale', 'customers.read', 'after_sales.read', 'after_sales.manage'] },
     { code: 'SALES_STAFF', name: 'Nhân viên bán hàng', permissions: ['catalog.read', 'inventory.read', 'sales.read', 'sales.create'] },
-    { code: 'REPORT_VIEWER', name: 'Nhân viên báo cáo', permissions: ['organization.read', 'inventory.read', 'sales.read', 'reports.sales'] },
+    { code: 'REPORT_VIEWER', name: 'Nhân viên báo cáo', permissions: ['organization.read', 'inventory.read', 'sales.read', 'reports.sales', 'reconciliation.read'] },
     { code: 'PURCHASING_STAFF', name: 'Nhân viên mua hàng', permissions: ['catalog.read', 'inventory.read', 'purchasing.read', 'purchasing.manage'] },
   ];
   const seededRoles = new Map<string, { id: string }>();

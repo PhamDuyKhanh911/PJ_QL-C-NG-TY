@@ -16,6 +16,7 @@ import { AfterSalesModule } from './after-sales/after-sales.module';
 import { ReportsModule } from './reports/reports.module';
 import { PurchasingModule } from './purchasing/purchasing.module';
 import { FulfillmentModule } from './fulfillment/fulfillment.module';
+import { ReconciliationModule } from './reconciliation/reconciliation.module';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { FulfillmentModule } from './fulfillment/fulfillment.module';
     ReportsModule,
     PurchasingModule,
     FulfillmentModule,
+    ReconciliationModule,
   ],
   controllers: [HealthController],
 })

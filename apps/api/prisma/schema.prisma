@@ -63,6 +63,12 @@ enum PurchaseOrderStatus {
   CANCELLED
 }
 
+enum ReconciliationStatus {
+  PENDING
+  MATCHED
+  MISMATCH
+}
+
 model Organization {
   id        String   @id @default(cuid())
   name      String
@@ -247,6 +253,7 @@ model SalesChannelAccount {
   orders         SalesOrder[]
   conversations  Conversation[]
   syncRuns       ChannelSyncRun[]
+  settlements    OrderSettlement[]
   @@unique([organizationId, code])
 }
 
@@ -326,7 +333,32 @@ model SalesOrder {
   items            SalesOrderItem[]
   afterSales       AfterSaleRequest[]
   fulfillmentEvents OrderFulfillmentEvent[]
+  settlement     OrderSettlement?
   @@unique([channelAccountId, externalOrderId])
+}
+
+model OrderSettlement {
+  id                   String @id @default(cuid())
+  orderId              String @unique
+  channelAccountId     String
+  externalSettlementId String?
+  grossAmount          Decimal @db.Decimal(18, 2)
+  platformFee          Decimal @default(0) @db.Decimal(18, 2)
+  shippingFee          Decimal @default(0) @db.Decimal(18, 2)
+  refundAmount         Decimal @default(0) @db.Decimal(18, 2)
+  otherFee             Decimal @default(0) @db.Decimal(18, 2)
+  expectedNetAmount    Decimal @db.Decimal(18, 2)
+  paidAmount           Decimal @db.Decimal(18, 2)
+  differenceAmount     Decimal @db.Decimal(18, 2)
+  status               ReconciliationStatus
+  settledAt            DateTime?
+  syncedById           String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  order                SalesOrder @relation(fields: [orderId], references: [id])
+  channelAccount       SalesChannelAccount @relation(fields: [channelAccountId], references: [id])
+  @@index([channelAccountId, status, settledAt])
+  @@unique([channelAccountId, externalSettlementId])
 }
 
 model OrderFulfillmentEvent {

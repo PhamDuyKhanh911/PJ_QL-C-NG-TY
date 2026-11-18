@@ -26,4 +26,6 @@ export const PERMISSION_CATALOG = [
   { code: 'purchasing.receive', group: 'Mua hàng', name: 'Xác nhận hàng mua thực nhận tại kho' },
   { code: 'fulfillment.read', group: 'Xuất kho', name: 'Xem số lượng đơn đồng bộ chờ xuất' },
   { code: 'fulfillment.dispatch', group: 'Xuất kho', name: 'Thủ kho xác nhận xuất và chịu trách nhiệm bàn giao' },
+  { code: 'reconciliation.read', group: 'Đối soát', name: 'Xem doanh thu, phí và tiền thực nhận' },
+  { code: 'reconciliation.sync', group: 'Đối soát', name: 'Đồng bộ dữ liệu thanh toán từ kênh bán' },
 ] as const;
