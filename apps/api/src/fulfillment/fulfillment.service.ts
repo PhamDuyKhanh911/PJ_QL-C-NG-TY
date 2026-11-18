@@ -3,6 +3,7 @@ import { ChannelType, InventoryTransactionType, OrderStatus, Prisma } from '@pri
 import { queueInventorySync } from '../channels/queue-inventory-sync';
 import { PrismaService } from '../prisma/prisma.service';
 import { FulfillmentActionDto } from './dto/fulfillment-action.dto';
+import { BatchDispatchDto } from './dto/batch-dispatch.dto';
 
 @Injectable()
 export class FulfillmentService {
@@ -10,7 +11,7 @@ export class FulfillmentService {
 
   async list(organizationId: string) {
     const orders = await this.prisma.salesOrder.findMany({
-      where: { channelAccount: { organizationId }, status: { in: [OrderStatus.CONFIRMED, OrderStatus.SHIPPED] } },
+      where: { channelAccount: { organizationId }, status: { in: [OrderStatus.CONFIRMED, OrderStatus.PACKING, OrderStatus.SHIPPED] } },
       include: { channelAccount: true, warehouse: true, customer: true, items: { include: { variant: { include: { product: true } } } }, fulfillmentEvents: { orderBy: { createdAt: 'asc' } } },
       orderBy: { orderedAt: 'asc' },
     });
@@ -20,8 +21,50 @@ export class FulfillmentService {
     return orders.map((order) => ({ ...order, responsibleUser: order.responsibleUserId ? usersById.get(order.responsibleUserId) ?? null : null, fulfillmentEvents: order.fulfillmentEvents.map((event) => ({ ...event, performedBy: usersById.get(event.performedById) ?? null, responsibleUser: event.responsibleUserId ? usersById.get(event.responsibleUserId) ?? null : null })) }));
   }
 
-  handlers(organizationId: string) {
+  async handlers(organizationId: string) {
     return this.prisma.user.findMany({ where: { organizationId, active: true }, select: { id: true, displayName: true, email: true }, orderBy: { displayName: 'asc' } });
+  }
+
+  async detail(organizationId: string, orderId: string) {
+    const order = await this.prisma.salesOrder.findFirst({ where: { id: orderId, channelAccount: { organizationId } }, include: { channelAccount: true, warehouse: { include: { branch: true } }, items: { include: { variant: { include: { product: true } } } }, fulfillmentEvents: { orderBy: { createdAt: 'asc' } } } });
+    if (!order) throw new NotFoundException('Không tìm thấy phiếu xuất');
+    const userIds = [...new Set([...(order.responsibleUserId ? [order.responsibleUserId] : []), ...order.fulfillmentEvents.map((event) => event.performedById)])];
+    const users = await this.prisma.user.findMany({ where: { organizationId, id: { in: userIds } }, select: { id: true, displayName: true, email: true } });
+    const usersById = new Map(users.map((user) => [user.id, user]));
+    return { ...order, responsibleUser: order.responsibleUserId ? usersById.get(order.responsibleUserId) ?? null : null, fulfillmentEvents: order.fulfillmentEvents.map((event) => ({ ...event, performedBy: usersById.get(event.performedById) ?? null })) };
+  }
+
+  async batchDispatch(organizationId: string, warehouseKeeperId: string, input: BatchDispatchDto) {
+    if (new Set(input.orderIds).size !== input.orderIds.length) throw new BadRequestException('Danh sách đơn bị trùng');
+    const channel = await this.prisma.salesChannelAccount.findFirst({ where: { id: input.channelAccountId, organizationId, active: true } });
+    if (!channel || channel.type === ChannelType.OFFLINE_STORE) throw new BadRequestException('Chỉ áp dụng xuất gộp cho gian hàng online');
+    const orders = await this.prisma.salesOrder.findMany({ where: { id: { in: input.orderIds }, channelAccountId: channel.id, status: OrderStatus.CONFIRMED }, include: { items: { include: { variant: true } } } });
+    if (orders.length !== input.orderIds.length) throw new BadRequestException('Có đơn không còn ở trạng thái chờ xuất hoặc không thuộc cùng gian hàng');
+    const warehouseIds = [...new Set(orders.map((order) => order.warehouseId))];
+    if (warehouseIds.length !== 1 || !warehouseIds[0]) throw new BadRequestException('Các đơn trong lượt xuất phải thuộc cùng một kho');
+    const warehouseId = warehouseIds[0];
+    const batchCode = `BATCH-${channel.code}-${Date.now().toString(36).toUpperCase()}`;
+    return this.prisma.$transaction(async (tx) => {
+      const changed = await tx.salesOrder.updateMany({ where: { id: { in: input.orderIds }, channelAccountId: channel.id, status: OrderStatus.CONFIRMED }, data: { status: OrderStatus.SHIPPED } });
+      if (changed.count !== orders.length) throw new BadRequestException('Một hoặc nhiều đơn vừa được thủ kho khác xử lý');
+      const totals = new Map<string, { quantity: number; sku: string }>();
+      for (const order of orders) for (const item of order.items) {
+        const current = totals.get(item.variantId);
+        totals.set(item.variantId, { quantity: (current?.quantity ?? 0) + item.quantity, sku: item.variant.sku });
+      }
+      for (const [variantId, total] of totals) {
+        const issued = await tx.$executeRaw(Prisma.sql`
+          UPDATE "InventoryBalance" SET "onHand" = "onHand" - ${total.quantity}, "reserved" = "reserved" - ${total.quantity}
+          WHERE "warehouseId" = ${warehouseId} AND "variantId" = ${variantId}
+            AND "onHand" >= ${total.quantity} AND "reserved" >= ${total.quantity}
+        `);
+        if (issued !== 1) throw new BadRequestException(`SKU ${total.sku} không đủ tồn đã giữ để xuất gộp`);
+        await tx.inventoryTransaction.create({ data: { warehouseId, variantId, type: InventoryTransactionType.SALE, quantity: -total.quantity, referenceType: 'FULFILLMENT_BATCH', referenceId: batchCode, reason: `Xuất gộp ${channel.name}: ${orders.length} đơn`, performedById: warehouseKeeperId } });
+      }
+      await tx.orderFulfillmentEvent.createMany({ data: orders.map((order) => ({ orderId: order.id, action: 'WAREHOUSE_BATCH_DISPATCHED', fromStatus: OrderStatus.CONFIRMED, toStatus: OrderStatus.SHIPPED, performedById: warehouseKeeperId, carrierName: channel.name, trackingCode: order.externalOrderId ?? batchCode, note: `Lượt xuất ${batchCode}` })) });
+      await queueInventorySync(tx, [...totals.keys()], warehouseKeeperId, 'ONLINE_BATCH_DISPATCHED');
+      return { batchCode, channel: { id: channel.id, name: channel.name, type: channel.type }, orderCount: orders.length, skuTotals: [...totals.entries()].map(([variantId, item]) => ({ variantId, ...item })) };
+    });
   }
 
   async dispatch(organizationId: string, warehouseKeeperId: string, orderId: string, input: FulfillmentActionDto) {
@@ -33,7 +76,7 @@ export class FulfillmentService {
     if (offline && !responsibleUser) throw new BadRequestException('Phiếu offline chưa chọn nhân viên nhận để đóng hàng');
     const officialMarketplace = order.channelAccount.type === ChannelType.SHOPEE || order.channelAccount.type === ChannelType.TIKTOK_SHOP;
     if (!offline && !officialMarketplace && (!input.carrierName || !input.trackingCode)) throw new BadRequestException('Đơn Facebook/online cần đơn vị vận chuyển và mã vận đơn');
-    const nextStatus = offline ? OrderStatus.DELIVERED : OrderStatus.SHIPPED;
+    const nextStatus = offline ? OrderStatus.PACKING : OrderStatus.SHIPPED;
     return this.prisma.$transaction(async (tx) => {
       const changed = await tx.salesOrder.updateMany({ where: { id: order.id, status: OrderStatus.CONFIRMED }, data: { status: nextStatus } });
       if (changed.count !== 1) throw new BadRequestException('Đơn đã được thủ kho khác xuất hoặc trạng thái đã thay đổi');
@@ -52,4 +95,5 @@ export class FulfillmentService {
       return tx.salesOrder.findUnique({ where: { id: order.id }, include: { channelAccount: true, fulfillmentEvents: true } });
     });
   }
+
 }
