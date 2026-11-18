@@ -43,7 +43,13 @@ export class SalesService {
         const balance = await tx.inventoryBalance.findUnique({ where: { warehouseId_variantId: { warehouseId: warehouse.id, variantId: item.variantId } } });
         const available = balance ? balance.onHand - balance.reserved - balance.quarantined - balance.safetyStock : 0;
         if (!balance || available < item.quantity) throw new BadRequestException(`SKU ${variantMap.get(item.variantId)!.sku} không đủ tồn có thể bán`);
-        await tx.inventoryBalance.update({ where: { id: balance.id }, data: { reserved: { increment: item.quantity } } });
+        const reserved = await tx.$executeRaw(Prisma.sql`
+          UPDATE "InventoryBalance"
+          SET "reserved" = "reserved" + ${item.quantity}
+          WHERE "id" = ${balance.id}
+            AND ("onHand" - "reserved" - "quarantined" - "safetyStock") >= ${item.quantity}
+        `);
+        if (reserved !== 1) throw new BadRequestException(`SKU ${variantMap.get(item.variantId)!.sku} vừa được đơn khác giữ hết; vui lòng tải lại tồn kho`);
         await tx.inventoryTransaction.create({ data: { warehouseId: warehouse.id, variantId: item.variantId, type: InventoryTransactionType.RESERVATION, quantity: item.quantity, reason: 'Giữ tồn cho đơn hàng mới', referenceType: 'SALES_ORDER', referenceId: orderId, performedById } });
       }
       const customer = input.customerName ? await tx.customer.create({ data: { organizationId, displayName: input.customerName } }) : null;

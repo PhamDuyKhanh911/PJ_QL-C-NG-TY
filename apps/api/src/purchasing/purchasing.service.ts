@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { InventoryTransactionType, PurchaseOrderStatus } from '@prisma/client';
+import { InventoryTransactionType, Prisma, PurchaseOrderStatus } from '@prisma/client';
 import { queueInventorySync } from '../channels/queue-inventory-sync';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePurchaseOrderDto } from './dto/create-purchase-order.dto';
@@ -14,15 +14,28 @@ export class PurchasingService {
   }
 
   async suggestions(organizationId: string) {
-    const balances = await this.prisma.inventoryBalance.findMany({
-      where: { warehouse: { branch: { organizationId } } },
-      include: { warehouse: true, variant: { include: { product: true } } },
-      orderBy: [{ warehouse: { name: 'asc' } }, { variant: { sku: 'asc' } }],
-    });
+    const [balances, incomingItems] = await Promise.all([
+      this.prisma.inventoryBalance.findMany({
+        where: { warehouse: { branch: { organizationId } } },
+        include: { warehouse: true, variant: { include: { product: true } } },
+        orderBy: [{ warehouse: { name: 'asc' } }, { variant: { sku: 'asc' } }],
+      }),
+      this.prisma.purchaseOrderItem.findMany({
+        where: { purchaseOrder: { organizationId, status: { in: [PurchaseOrderStatus.ORDERED, PurchaseOrderStatus.PARTIALLY_RECEIVED] } } },
+        select: { variantId: true, orderedQuantity: true, receivedQuantity: true, purchaseOrder: { select: { warehouseId: true } } },
+      }),
+    ]);
+    const incoming = new Map<string, number>();
+    for (const item of incomingItems) {
+      const key = `${item.purchaseOrder.warehouseId}:${item.variantId}`;
+      incoming.set(key, (incoming.get(key) ?? 0) + item.orderedQuantity - item.receivedQuantity);
+    }
     return balances.map((item) => {
       const available = item.onHand - item.reserved - item.quarantined - item.safetyStock;
-      return { ...item, available, suggestedQuantity: Math.max(item.reorderPoint * 2 - available, 1) };
-    }).filter((item) => item.available <= item.reorderPoint);
+      const incomingQuantity = incoming.get(`${item.warehouseId}:${item.variantId}`) ?? 0;
+      const projectedAvailable = available + incomingQuantity;
+      return { ...item, available, incomingQuantity, projectedAvailable, suggestedQuantity: Math.max(item.reorderPoint * 2 - projectedAvailable, 0) };
+    }).filter((item) => item.projectedAvailable <= item.reorderPoint && item.suggestedQuantity > 0);
   }
 
   orders(organizationId: string) {
@@ -43,9 +56,20 @@ export class PurchasingService {
     ]);
     if (!supplier || !warehouse || variants.length !== input.items.length) throw new NotFoundException('Nhà cung cấp, kho hoặc SKU không hợp lệ');
     const suffix = `${Date.now().toString().slice(-8)}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
-    return this.prisma.purchaseOrder.create({
-      data: { organizationId, supplierId: supplier.id, warehouseId: warehouse.id, orderNumber: `PO-${suffix}`, status: PurchaseOrderStatus.ORDERED, expectedAt: input.expectedAt ? new Date(input.expectedAt) : undefined, note: input.note, createdById: userId, items: { create: input.items } },
-      include: { supplier: true, warehouse: true, items: { include: { variant: { include: { product: true } } } } },
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`${organizationId}:${warehouse.id}:purchasing`})) IS NULL AS locked`);
+      const suggestions = await this.suggestions(organizationId);
+      const suggestedByVariant = new Map(suggestions.filter((item) => item.warehouseId === warehouse.id).map((item) => [item.variantId, item.suggestedQuantity]));
+      for (const item of input.items) {
+        const allowed = suggestedByVariant.get(item.variantId) ?? 0;
+        const sku = variants.find((variant) => variant.id === item.variantId)?.sku;
+        if (allowed === 0) throw new BadRequestException(`SKU ${sku} không còn nhu cầu bổ sung sau khi tính hàng đang về`);
+        if (item.orderedQuantity > allowed) throw new BadRequestException(`Số lượng nhập vượt nhu cầu còn thiếu của SKU ${sku}; tối đa ${allowed}`);
+      }
+      return tx.purchaseOrder.create({
+        data: { organizationId, supplierId: supplier.id, warehouseId: warehouse.id, orderNumber: `PO-${suffix}`, status: PurchaseOrderStatus.ORDERED, expectedAt: input.expectedAt ? new Date(input.expectedAt) : undefined, note: input.note, createdById: userId, items: { create: input.items } },
+        include: { supplier: true, warehouse: true, items: { include: { variant: { include: { product: true } } } } },
+      });
     });
   }
 
