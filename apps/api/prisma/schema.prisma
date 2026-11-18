@@ -1,0 +1,284 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ChannelType {
+  TIKTOK_SHOP
+  SHOPEE
+  WEBSITE
+  OFFLINE_STORE
+  WHOLESALE
+  OTHER
+}
+
+enum InventoryTransactionType {
+  RECEIPT
+  SALE
+  RESERVATION
+  RESERVATION_RELEASE
+  TRANSFER_IN
+  TRANSFER_OUT
+  ADJUSTMENT
+  RETURN_IN
+  RETURN_OUT
+  QUARANTINE
+}
+
+enum OrderStatus {
+  DRAFT
+  PENDING
+  CONFIRMED
+  PACKING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  RETURNED
+  PARTIALLY_RETURNED
+}
+
+enum AfterSaleType {
+  CANCELLATION
+  RETURN
+  EXCHANGE
+  REFUND
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  code      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  branches  Branch[]
+  users     User[]
+  products  Product[]
+  channels  SalesChannelAccount[]
+  customers Customer[]
+}
+
+model Branch {
+  id             String   @id @default(cuid())
+  organizationId String
+  code           String
+  name           String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  warehouses     Warehouse[]
+  @@unique([organizationId, code])
+}
+
+model User {
+  id             String   @id @default(cuid())
+  organizationId String
+  email          String
+  displayName    String
+  passwordHash   String
+  active         Boolean  @default(true)
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  roleAssignments UserRoleAssignment[]
+  @@unique([organizationId, email])
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  permissions Json
+  assignments UserRoleAssignment[]
+}
+
+model UserRoleAssignment {
+  id        String @id @default(cuid())
+  userId    String
+  roleId    String
+  scopeType String
+  scopeId   String?
+  user      User   @relation(fields: [userId], references: [id])
+  role      Role   @relation(fields: [roleId], references: [id])
+  @@index([userId, scopeType, scopeId])
+}
+
+model Product {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  active         Boolean  @default(true)
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  variants       ProductVariant[]
+}
+
+model ProductVariant {
+  id        String   @id @default(cuid())
+  productId String
+  sku       String   @unique
+  barcode   String?  @unique
+  name      String
+  costPrice Decimal  @db.Decimal(18, 2)
+  salePrice Decimal  @db.Decimal(18, 2)
+  product   Product  @relation(fields: [productId], references: [id])
+  balances  InventoryBalance[]
+  mappings  ChannelSkuMapping[]
+  orderItems SalesOrderItem[]
+}
+
+model Warehouse {
+  id       String @id @default(cuid())
+  branchId String
+  code     String
+  name     String
+  branch   Branch @relation(fields: [branchId], references: [id])
+  balances InventoryBalance[]
+  transactions InventoryTransaction[]
+  @@unique([branchId, code])
+}
+
+model InventoryBalance {
+  id             String @id @default(cuid())
+  warehouseId    String
+  variantId      String
+  onHand         Int    @default(0)
+  reserved       Int    @default(0)
+  quarantined    Int    @default(0)
+  safetyStock    Int    @default(0)
+  reorderPoint   Int    @default(0)
+  warehouse      Warehouse @relation(fields: [warehouseId], references: [id])
+  variant        ProductVariant @relation(fields: [variantId], references: [id])
+  @@unique([warehouseId, variantId])
+}
+
+model InventoryTransaction {
+  id          String @id @default(cuid())
+  warehouseId String
+  variantId   String
+  type        InventoryTransactionType
+  quantity    Int
+  referenceType String?
+  referenceId String?
+  reason      String?
+  performedById String?
+  createdAt   DateTime @default(now())
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  @@index([variantId, createdAt])
+}
+
+model SalesChannelAccount {
+  id             String @id @default(cuid())
+  organizationId String
+  type           ChannelType
+  code           String
+  name           String
+  externalShopId String?
+  active         Boolean @default(true)
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  skuMappings    ChannelSkuMapping[]
+  orders         SalesOrder[]
+  conversations  Conversation[]
+  @@unique([organizationId, code])
+}
+
+model ChannelSkuMapping {
+  id               String @id @default(cuid())
+  channelAccountId String
+  variantId        String
+  externalProductId String
+  externalSkuId    String
+  externalSku      String?
+  channelAccount   SalesChannelAccount @relation(fields: [channelAccountId], references: [id])
+  variant          ProductVariant @relation(fields: [variantId], references: [id])
+  @@unique([channelAccountId, externalSkuId])
+}
+
+model Customer {
+  id             String @id @default(cuid())
+  organizationId String
+  displayName    String
+  phone          String?
+  email          String?
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  identities     CustomerIdentity[]
+  orders         SalesOrder[]
+}
+
+model CustomerIdentity {
+  id               String @id @default(cuid())
+  customerId       String
+  channelAccountId String
+  externalBuyerId  String
+  displayName      String?
+  customer         Customer @relation(fields: [customerId], references: [id])
+  conversations    Conversation[]
+  @@unique([channelAccountId, externalBuyerId])
+}
+
+model SalesOrder {
+  id               String @id @default(cuid())
+  orderNumber      String @unique
+  channelAccountId String
+  customerId       String?
+  externalOrderId  String?
+  status           OrderStatus
+  subtotal         Decimal @db.Decimal(18, 2)
+  discount         Decimal @default(0) @db.Decimal(18, 2)
+  total            Decimal @db.Decimal(18, 2)
+  orderedAt        DateTime
+  createdAt        DateTime @default(now())
+  channelAccount   SalesChannelAccount @relation(fields: [channelAccountId], references: [id])
+  customer         Customer? @relation(fields: [customerId], references: [id])
+  items            SalesOrderItem[]
+  afterSales       AfterSaleRequest[]
+  @@unique([channelAccountId, externalOrderId])
+}
+
+model SalesOrderItem {
+  id        String @id @default(cuid())
+  orderId   String
+  variantId String
+  quantity  Int
+  unitPrice Decimal @db.Decimal(18, 2)
+  order     SalesOrder @relation(fields: [orderId], references: [id])
+  variant   ProductVariant @relation(fields: [variantId], references: [id])
+}
+
+model AfterSaleRequest {
+  id               String @id @default(cuid())
+  orderId          String
+  type             AfterSaleType
+  reasonCode       String
+  responsibleParty String
+  quantity         Int @default(1)
+  status           String
+  createdAt        DateTime @default(now())
+  order            SalesOrder @relation(fields: [orderId], references: [id])
+}
+
+model Conversation {
+  id                 String @id @default(cuid())
+  channelAccountId   String
+  customerIdentityId String
+  externalId         String
+  status             String @default("OPEN")
+  assignedUserId     String?
+  lastMessageAt      DateTime?
+  channelAccount     SalesChannelAccount @relation(fields: [channelAccountId], references: [id])
+  customerIdentity   CustomerIdentity @relation(fields: [customerIdentityId], references: [id])
+  messages           Message[]
+  @@unique([channelAccountId, externalId])
+}
+
+model Message {
+  id             String @id @default(cuid())
+  conversationId String
+  externalId     String?
+  direction      String
+  type           String @default("TEXT")
+  content        String
+  senderRole     String
+  sentAt         DateTime
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  @@unique([conversationId, externalId])
+}
+
