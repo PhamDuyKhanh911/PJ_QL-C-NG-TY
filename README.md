@@ -29,6 +29,22 @@ pnpm dev
 - API: http://localhost:4000/api
 - Health check: http://localhost:4000/api/health
 
+### Môi trường portable trên Windows
+
+Máy phát triển có thể chạy Node.js và PostgreSQL trực tiếp trong thư mục dự án, không cần quyền quản trị:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-local.ps1
+```
+
+Dừng toàn bộ dịch vụ:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\stop-local.ps1
+```
+
+Các công cụ nằm trong `.tools`, dữ liệu PostgreSQL và log nằm trong `.data`; hai thư mục này không được đưa lên Git.
+
 ### Tài khoản phát triển
 
 Sau khi chạy seed:

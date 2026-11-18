@@ -7,4 +7,6 @@ coverage/
 *.log
 *.tsbuildinfo
 .pnpm-store/
+.tools/
+.data/
 apps/api/prisma/dev.db*
