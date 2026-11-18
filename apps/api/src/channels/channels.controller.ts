@@ -11,5 +11,7 @@ import { ChannelsService } from './channels.service';
 export class ChannelsController {
   constructor(private readonly channels: ChannelsService) {}
   @Get() @RequirePermissions('channels.read') list(@CurrentUser() user: AuthenticatedUser) { return this.channels.list(user.organizationId); }
+  @Get('sync-summary') @RequirePermissions('channels.read') summary(@CurrentUser() user: AuthenticatedUser) { return this.channels.syncSummary(user.organizationId); }
+  @Post('process-pending') @RequirePermissions('channels.sync') processPending(@CurrentUser() user: AuthenticatedUser) { return this.channels.processPending(user.organizationId, user.id); }
   @Post(':id/sync-inventory') @RequirePermissions('channels.sync') sync(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) { return this.channels.syncInventory(user.organizationId, id, user.id); }
 }
