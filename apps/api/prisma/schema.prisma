@@ -10,6 +10,7 @@ datasource db {
 enum ChannelType {
   TIKTOK_SHOP
   SHOPEE
+  FACEBOOK_MESSENGER
   WEBSITE
   OFFLINE_STORE
   WHOLESALE

@@ -8,6 +8,7 @@ import { OrganizationModule } from './organization/organization.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { SalesModule } from './sales/sales.module';
 import { AdministrationModule } from './administration/administration.module';
+import { ConversationsModule } from './conversations/conversations.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { AdministrationModule } from './administration/administration.module';
     InventoryModule,
     SalesModule,
     AdministrationModule,
+    ConversationsModule,
   ],
   controllers: [HealthController],
 })

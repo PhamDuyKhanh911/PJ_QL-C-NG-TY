@@ -80,6 +80,7 @@ async function main() {
     ['SHOPEE_02', 'Shopee Seller 02', ChannelType.SHOPEE],
     ['SHOPEE_03', 'Shopee Seller 03', ChannelType.SHOPEE],
     ['POS_01', 'Cửa hàng trung tâm', ChannelType.OFFLINE_STORE],
+    ['FACEBOOK_01', 'Facebook Page chính', ChannelType.FACEBOOK_MESSENGER],
   ];
   for (const [code, name, type] of channels) {
     await prisma.salesChannelAccount.upsert({
@@ -153,6 +154,37 @@ async function main() {
         ...(item.status === 'CANCELLED' ? { afterSales: { create: { type: 'CANCELLATION', reasonCode: 'CUSTOMER_CHANGED_MIND', responsibleParty: 'CUSTOMER', status: 'COMPLETED' } } } : {}),
         ...(item.status === 'RETURNED' ? { afterSales: { create: { type: 'RETURN', reasonCode: 'SIZE_NOT_FIT', responsibleParty: 'CUSTOMER', status: 'COMPLETED' } } } : {}),
       },
+    });
+  }
+
+  const chatFixtures = [
+    { channel: 'TIKTOK_01', buyer: 'tt-buyer-001', name: 'Minh Anh', status: 'UNREPLIED', inbound: 'Shop ơi áo này còn size M không?' },
+    { channel: 'TIKTOK_02', buyer: 'tt-buyer-002', name: 'Thu Hà', status: 'UNREAD', inbound: 'Đơn của mình khi nào được giao vậy shop?' },
+    { channel: 'TIKTOK_03', buyer: 'tt-buyer-003', name: 'Quang Huy', status: 'OPEN', inbound: 'Mình muốn đổi sang màu đen.' },
+    { channel: 'SHOPEE_01', buyer: 'sp-buyer-001', name: 'Ngọc Linh', status: 'UNREPLIED', inbound: 'Sản phẩm có được kiểm tra trước khi nhận không?' },
+    { channel: 'SHOPEE_02', buyer: 'sp-buyer-002', name: 'Hoàng Nam', status: 'REPLIED', inbound: 'Cảm ơn shop, mình đã nhận được hàng.' },
+    { channel: 'SHOPEE_03', buyer: 'sp-buyer-003', name: 'Mai Phương', status: 'UNREAD', inbound: 'Shop hỗ trợ mình đổi size nhé.' },
+    { channel: 'FACEBOOK_01', buyer: 'fb-psid-001', name: 'Bảo Trâm', status: 'UNREPLIED', inbound: 'Mẫu túi này còn hàng không ạ?' },
+  ];
+  const allChannels = await prisma.salesChannelAccount.findMany({ where: { organizationId: organization.id } });
+  const allChannelByCode = new Map(allChannels.map((item) => [item.code, item]));
+  for (const [index, fixture] of chatFixtures.entries()) {
+    const channel = allChannelByCode.get(fixture.channel)!;
+    let identity = await prisma.customerIdentity.findUnique({ where: { channelAccountId_externalBuyerId: { channelAccountId: channel.id, externalBuyerId: fixture.buyer } } });
+    if (!identity) {
+      const customer = await prisma.customer.create({ data: { organizationId: organization.id, displayName: fixture.name } });
+      identity = await prisma.customerIdentity.create({ data: { customerId: customer.id, channelAccountId: channel.id, externalBuyerId: fixture.buyer, displayName: fixture.name } });
+    }
+    const sentAt = new Date(Date.now() - index * 420_000);
+    const conversation = await prisma.conversation.upsert({
+      where: { channelAccountId_externalId: { channelAccountId: channel.id, externalId: `demo-conversation-${fixture.buyer}` } },
+      update: { status: fixture.status, lastMessageAt: sentAt },
+      create: { channelAccountId: channel.id, customerIdentityId: identity.id, externalId: `demo-conversation-${fixture.buyer}`, status: fixture.status, lastMessageAt: sentAt },
+    });
+    await prisma.message.upsert({
+      where: { conversationId_externalId: { conversationId: conversation.id, externalId: `demo-message-${fixture.buyer}` } },
+      update: { content: fixture.inbound, sentAt },
+      create: { conversationId: conversation.id, externalId: `demo-message-${fixture.buyer}`, direction: 'INBOUND', type: 'TEXT', content: fixture.inbound, senderRole: 'CUSTOMER', sentAt },
     });
   }
 }
