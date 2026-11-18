@@ -25,6 +25,7 @@ export class FulfillmentService {
     if (!order || !order.warehouseId) throw new NotFoundException('Không tìm thấy đơn hoặc đơn chưa được phân kho');
     if (order.status !== OrderStatus.CONFIRMED) throw new BadRequestException('Chỉ đơn đã xác nhận và chưa xuất mới được xuất kho');
     const offline = order.channelAccount.type === ChannelType.OFFLINE_STORE;
+    if (offline && (!order.recipientName || !order.recipientPhone)) throw new BadRequestException('Phiếu offline thiếu thông tin người nhận, chưa thể xuất kho');
     const officialMarketplace = order.channelAccount.type === ChannelType.SHOPEE || order.channelAccount.type === ChannelType.TIKTOK_SHOP;
     if (!offline && !officialMarketplace && (!input.carrierName || !input.trackingCode)) throw new BadRequestException('Đơn Facebook/online cần đơn vị vận chuyển và mã vận đơn');
     const nextStatus = offline ? OrderStatus.DELIVERED : OrderStatus.SHIPPED;

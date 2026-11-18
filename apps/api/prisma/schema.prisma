@@ -312,6 +312,10 @@ model SalesOrder {
   subtotal         Decimal @db.Decimal(18, 2)
   discount         Decimal @default(0) @db.Decimal(18, 2)
   total            Decimal @db.Decimal(18, 2)
+  recipientName    String?
+  recipientPhone   String?
+  recipientAddress String?
+  recipientNote    String?
   orderedAt        DateTime
   createdAt        DateTime @default(now())
   channelAccount   SalesChannelAccount @relation(fields: [channelAccountId], references: [id])

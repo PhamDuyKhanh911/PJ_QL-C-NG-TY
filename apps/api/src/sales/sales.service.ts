@@ -34,6 +34,7 @@ export class SalesService {
     ]);
     if (!channel || !warehouse || variants.length !== new Set(input.items.map((item) => item.variantId)).size) throw new NotFoundException('Kênh bán, kho hoặc SKU không hợp lệ');
     if (channel.type === ChannelType.SHOPEE || channel.type === ChannelType.TIKTOK_SHOP) throw new BadRequestException('Đơn Shopee/TikTok phải đồng bộ tự động từ seller, không nhập tay');
+    if (channel.type === ChannelType.OFFLINE_STORE && (!input.recipientName || !input.recipientPhone)) throw new BadRequestException('Phiếu bán offline bắt buộc có tên và số điện thoại người nhận');
     const variantMap = new Map(variants.map((variant) => [variant.id, variant]));
     const subtotal = input.items.reduce((sum, item) => sum.add(variantMap.get(item.variantId)!.salePrice.mul(item.quantity)), new Prisma.Decimal(0));
     const discount = new Prisma.Decimal(input.discount);
@@ -66,6 +67,10 @@ export class SalesService {
           subtotal,
           discount,
           total: subtotal.sub(discount),
+          recipientName: input.recipientName ?? input.customerName,
+          recipientPhone: input.recipientPhone,
+          recipientAddress: input.recipientAddress,
+          recipientNote: input.recipientNote,
           orderedAt: new Date(),
           items: { create: input.items.map((item) => ({ variantId: item.variantId, quantity: item.quantity, unitPrice: variantMap.get(item.variantId)!.salePrice })) },
         },
