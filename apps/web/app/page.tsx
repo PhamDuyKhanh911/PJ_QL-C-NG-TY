@@ -23,7 +23,7 @@ export default function Dashboard() {
           <a className="active">Tổng quan</a>
           <a href="/orders">Đơn hàng</a><a>Bán hàng POS</a><a>Sản phẩm</a><a href="/inventory">Kho hàng</a>
           <a>Kênh bán hàng</a><a>Hộp thư chung <b>18</b></a><a>Khách hàng</a>
-          <a>Mua hàng</a><a>Báo cáo</a><a>Nhân viên & phân quyền</a><a>Cấu hình</a>
+          <a>Mua hàng</a><a>Báo cáo</a><a href="/staff">Nhân viên & phân quyền</a><a>Cấu hình</a>
         </nav>
         <div className="user"><i>NA</i><div>Nguyễn An<small>Quản trị viên</small></div></div>
       </aside>

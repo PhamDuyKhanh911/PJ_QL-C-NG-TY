@@ -1,0 +1,80 @@
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { PasswordService } from '../auth/password.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { AssignRoleDto } from './dto/assign-role.dto';
+import { CreateRoleDto } from './dto/create-role.dto';
+import { CreateUserDto } from './dto/create-user.dto';
+import { PERMISSION_CATALOG } from './permissions.catalog';
+
+@Injectable()
+export class AdministrationService {
+  constructor(private readonly prisma: PrismaService, private readonly passwords: PasswordService) {}
+
+  listUsers(organizationId: string) {
+    return this.prisma.user.findMany({
+      where: { organizationId },
+      select: { id: true, email: true, displayName: true, active: true, roleAssignments: { include: { role: { select: { id: true, code: true, name: true, permissions: true } } } } },
+      orderBy: { displayName: 'asc' },
+    });
+  }
+
+  listRoles(organizationId: string) {
+    return this.prisma.role.findMany({ where: { organizationId }, include: { _count: { select: { assignments: true } } }, orderBy: { name: 'asc' } });
+  }
+
+  async createUser(organizationId: string, input: CreateUserDto) {
+    try {
+      return await this.prisma.user.create({
+        data: { organizationId, email: input.email.toLowerCase(), displayName: input.displayName, passwordHash: await this.passwords.hash(input.password) },
+        select: { id: true, email: true, displayName: true, active: true },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new ConflictException('Email đã tồn tại trong doanh nghiệp');
+      throw error;
+    }
+  }
+
+  async createRole(organizationId: string, input: CreateRoleDto) {
+    const known = new Set<string>(PERMISSION_CATALOG.map((item) => item.code));
+    const unknown = input.permissions.filter((permission) => permission !== '*' && !known.has(permission));
+    if (unknown.length) throw new BadRequestException(`Quyền không hợp lệ: ${unknown.join(', ')}`);
+    try {
+      return await this.prisma.role.create({ data: { organizationId, code: input.code.toUpperCase(), name: input.name, permissions: input.permissions } });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new ConflictException('Mã vai trò đã tồn tại');
+      throw error;
+    }
+  }
+
+  async assignRole(organizationId: string, userId: string, input: AssignRoleDto) {
+    const [user, role] = await Promise.all([
+      this.prisma.user.findFirst({ where: { id: userId, organizationId } }),
+      this.prisma.role.findFirst({ where: { id: input.roleId, organizationId } }),
+    ]);
+    if (!user || !role) throw new NotFoundException('Không tìm thấy nhân viên hoặc vai trò');
+    await this.validateScope(organizationId, input.scopeType, input.scopeId);
+    return this.prisma.userRoleAssignment.upsert({
+      where: { userId_roleId_scopeType_scopeId: { userId, roleId: role.id, scopeType: input.scopeType, scopeId: input.scopeId } },
+      update: {},
+      create: { userId, roleId: role.id, scopeType: input.scopeType, scopeId: input.scopeId },
+      include: { role: true },
+    });
+  }
+
+  async setActive(organizationId: string, userId: string, active: boolean, currentUserId: string) {
+    if (userId === currentUserId && !active) throw new BadRequestException('Không thể tự vô hiệu hóa tài khoản đang đăng nhập');
+    const result = await this.prisma.user.updateMany({ where: { id: userId, organizationId }, data: { active } });
+    if (!result.count) throw new NotFoundException('Không tìm thấy nhân viên');
+    return { id: userId, active };
+  }
+
+  private async validateScope(organizationId: string, scopeType: string, scopeId: string) {
+    let valid = false;
+    if (scopeType === 'ORGANIZATION') valid = scopeId === organizationId;
+    if (scopeType === 'BRANCH') valid = Boolean(await this.prisma.branch.findFirst({ where: { id: scopeId, organizationId } }));
+    if (scopeType === 'WAREHOUSE') valid = Boolean(await this.prisma.warehouse.findFirst({ where: { id: scopeId, branch: { organizationId } } }));
+    if (scopeType === 'CHANNEL') valid = Boolean(await this.prisma.salesChannelAccount.findFirst({ where: { id: scopeId, organizationId } }));
+    if (!valid) throw new BadRequestException('Phạm vi dữ liệu không thuộc doanh nghiệp hiện tại');
+  }
+}

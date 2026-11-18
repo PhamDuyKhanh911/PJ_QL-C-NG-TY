@@ -37,6 +37,41 @@ async function main() {
     update: {},
     create: { id: `${user.id}-${role.id}`, userId: user.id, roleId: role.id, scopeType: 'ORGANIZATION', scopeId: organization.id },
   });
+
+  const defaultRoles = [
+    { code: 'ONLINE_MANAGER', name: 'Quản lý bán hàng online', permissions: ['organization.read', 'catalog.read', 'inventory.read', 'sales.read', 'sales.create', 'sales.cancel', 'reports.sales', 'conversations.read', 'conversations.reply'] },
+    { code: 'WAREHOUSE_STAFF', name: 'Nhân viên kho', permissions: ['catalog.read', 'inventory.read', 'inventory.adjust', 'sales.read'] },
+    { code: 'CUSTOMER_SERVICE', name: 'Nhân viên chăm sóc khách hàng', permissions: ['sales.read', 'conversations.read', 'conversations.reply'] },
+    { code: 'SALES_STAFF', name: 'Nhân viên bán hàng', permissions: ['catalog.read', 'inventory.read', 'sales.read', 'sales.create'] },
+    { code: 'REPORT_VIEWER', name: 'Nhân viên báo cáo', permissions: ['organization.read', 'inventory.read', 'sales.read', 'reports.sales'] },
+  ];
+  const seededRoles = new Map<string, { id: string }>();
+  for (const item of defaultRoles) {
+    const seededRole = await prisma.role.upsert({
+      where: { organizationId_code: { organizationId: organization.id, code: item.code } },
+      update: { name: item.name, permissions: item.permissions },
+      create: { organizationId: organization.id, ...item },
+    });
+    seededRoles.set(item.code, seededRole);
+  }
+  const sampleUsers = [
+    { email: 'online@local.test', name: 'Nguyễn Minh Online', role: 'ONLINE_MANAGER' },
+    { email: 'warehouse@local.test', name: 'Trần Nhân Kho', role: 'WAREHOUSE_STAFF' },
+    { email: 'support@local.test', name: 'Lê Chăm Sóc', role: 'CUSTOMER_SERVICE' },
+  ];
+  for (const item of sampleUsers) {
+    const sampleUser = await prisma.user.upsert({
+      where: { organizationId_email: { organizationId: organization.id, email: item.email } },
+      update: { displayName: item.name },
+      create: { organizationId: organization.id, email: item.email, displayName: item.name, passwordHash: await hashPassword('Employee@123') },
+    });
+    const assignedRole = seededRoles.get(item.role)!;
+    await prisma.userRoleAssignment.upsert({
+      where: { id: `${sampleUser.id}-${assignedRole.id}` },
+      update: {},
+      create: { id: `${sampleUser.id}-${assignedRole.id}`, userId: sampleUser.id, roleId: assignedRole.id, scopeType: 'ORGANIZATION', scopeId: organization.id },
+    });
+  }
   const channels: Array<[string, string, ChannelType]> = [
     ['TIKTOK_01', 'TikTok Seller 01', ChannelType.TIKTOK_SHOP],
     ['TIKTOK_02', 'TikTok Seller 02', ChannelType.TIKTOK_SHOP],

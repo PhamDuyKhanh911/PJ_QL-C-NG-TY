@@ -1,0 +1,17 @@
+export const PERMISSION_CATALOG = [
+  { code: 'organization.read', group: 'Tổ chức', name: 'Xem cơ cấu doanh nghiệp' },
+  { code: 'users.read', group: 'Nhân viên', name: 'Xem nhân viên và vai trò' },
+  { code: 'users.manage', group: 'Nhân viên', name: 'Tạo và cập nhật nhân viên' },
+  { code: 'roles.manage', group: 'Nhân viên', name: 'Quản lý vai trò và quyền' },
+  { code: 'catalog.read', group: 'Sản phẩm', name: 'Xem sản phẩm' },
+  { code: 'catalog.create', group: 'Sản phẩm', name: 'Tạo sản phẩm' },
+  { code: 'inventory.read', group: 'Kho', name: 'Xem tồn kho' },
+  { code: 'inventory.adjust', group: 'Kho', name: 'Điều chỉnh tồn kho' },
+  { code: 'sales.read', group: 'Bán hàng', name: 'Xem đơn hàng' },
+  { code: 'sales.create', group: 'Bán hàng', name: 'Tạo đơn hàng' },
+  { code: 'sales.cancel', group: 'Bán hàng', name: 'Hủy đơn hàng' },
+  { code: 'reports.sales', group: 'Báo cáo', name: 'Xem báo cáo bán hàng' },
+  { code: 'conversations.read', group: 'CSKH', name: 'Xem hội thoại' },
+  { code: 'conversations.reply', group: 'CSKH', name: 'Trả lời hội thoại' },
+] as const;
+

@@ -104,6 +104,7 @@ model UserRoleAssignment {
   user      User   @relation(fields: [userId], references: [id])
   role      Role   @relation(fields: [roleId], references: [id])
   @@index([userId, scopeType, scopeId])
+  @@unique([userId, roleId, scopeType, scopeId])
 }
 
 model Product {
