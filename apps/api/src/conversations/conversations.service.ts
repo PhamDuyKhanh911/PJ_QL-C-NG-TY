@@ -5,6 +5,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AssignConversationDto } from './dto/assign-conversation.dto';
 import { ListConversationsDto } from './dto/list-conversations.dto';
 import { SendMessageDto } from './dto/send-message.dto';
+import { CloseSaleDto } from './dto/close-sale.dto';
+import { BadRequestException } from '@nestjs/common';
 
 @Injectable()
 export class ConversationsService {
@@ -61,6 +63,15 @@ export class ConversationsService {
     const target = await this.prisma.user.findFirst({ where: { id: input.userId, organizationId: user.organizationId, active: true } });
     if (!target) throw new NotFoundException('Không tìm thấy nhân viên được phân công');
     return this.prisma.conversation.update({ where: { id: conversationId }, data: { assignedUserId: target.id } });
+  }
+
+  async closeSale(user: AuthenticatedUser, conversationId: string, input: CloseSaleDto) {
+    await this.assertAccessible(user, conversationId);
+    const conversation = await this.prisma.conversation.findUniqueOrThrow({ where: { id: conversationId } });
+    const order = await this.prisma.salesOrder.findFirst({ where: { id: input.orderId, channelAccount: { organizationId: user.organizationId }, status: { not: 'CANCELLED' } } });
+    if (!order) throw new NotFoundException('Không tìm thấy đơn hàng hợp lệ để ghi nhận doanh thu');
+    if (order.channelAccountId !== conversation.channelAccountId) throw new BadRequestException('Đơn hàng phải thuộc cùng seller với hội thoại');
+    return this.prisma.conversation.update({ where: { id: conversationId }, data: { status: 'CLOSED_WON', closedOrderId: order.id, closedByUserId: user.id, closedAt: new Date(), assignedUserId: user.id } });
   }
 
   private async assertAccessible(user: AuthenticatedUser, conversationId: string) {

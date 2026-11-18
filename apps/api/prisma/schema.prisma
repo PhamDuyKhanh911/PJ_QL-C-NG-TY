@@ -296,10 +296,14 @@ model Conversation {
   status             String @default("OPEN")
   assignedUserId     String?
   lastMessageAt      DateTime?
+  closedOrderId      String?
+  closedByUserId     String?
+  closedAt           DateTime?
   channelAccount     SalesChannelAccount @relation(fields: [channelAccountId], references: [id])
   customerIdentity   CustomerIdentity @relation(fields: [customerIdentityId], references: [id])
   messages           Message[]
   @@unique([channelAccountId, externalId])
+  @@index([closedByUserId, closedAt])
 }
 
 model Message {

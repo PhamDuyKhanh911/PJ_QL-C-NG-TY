@@ -21,4 +21,15 @@ export class ReportsService {
     const days = new Map<string,{date:string;orders:number;revenue:Prisma.Decimal}>(); for(const order of orders){const date=order.orderedAt.toISOString().slice(0,10);const current=days.get(date)??{date,orders:0,revenue:new Prisma.Decimal(0)};current.orders++;if(order.status!==OrderStatus.CANCELLED)current.revenue=current.revenue.add(order.total);days.set(date,current)}
     return { period:{from:start,to:end}, overview:{orders:orders.length,revenue,averageOrderValue:valid.length?revenue.div(valid.length):new Prisma.Decimal(0),cancelled,returned,exchanged,cancellationRate:orders.length?cancelled/orders.length:0,returnRate:valid.length?returned/valid.length:0,exchangeRate:valid.length?exchanged/valid.length:0}, online:summarize(orders.filter((order)=>!offlineTypes.includes(order.channelAccount.type))), offline:summarize(orders.filter((order)=>offlineTypes.includes(order.channelAccount.type))), byChannel, byDay:[...days.values()], topProducts:[...productMap.values()].sort((a,b)=>b.quantity-a.quantity).slice(0,10) };
   }
+  async assistedSales(organizationId: string, from?: string, to?: string) {
+    const end = to ? new Date(`${to}T23:59:59.999`) : new Date(); const start = from ? new Date(`${from}T00:00:00`) : new Date(end.getTime() - 29 * 86_400_000);
+    const conversations = await this.prisma.conversation.findMany({ where: { channelAccount: { organizationId }, messages: { some: { direction: 'OUTBOUND' } }, lastMessageAt: { gte: start, lte: end } }, include: { channelAccount: true, customerIdentity: true } });
+    const won = conversations.filter((item) => item.status === 'CLOSED_WON' && item.closedOrderId && item.closedByUserId);
+    const orderIds = won.map((item) => item.closedOrderId!); const userIds = [...new Set(won.map((item) => item.closedByUserId!))];
+    const [orders, users] = await Promise.all([this.prisma.salesOrder.findMany({ where: { id: { in: orderIds }, status: { not: OrderStatus.CANCELLED } } }), this.prisma.user.findMany({ where: { id: { in: userIds }, organizationId }, select: { id: true, displayName: true, email: true } })]);
+    const orderMap = new Map(orders.map((item) => [item.id, item])); const userMap = new Map(users.map((item) => [item.id, item]));
+    const revenue = won.reduce((sum, item) => sum.add(orderMap.get(item.closedOrderId!)?.total ?? 0), new Prisma.Decimal(0));
+    const byEmployee = users.map((user) => { const items = won.filter((item) => item.closedByUserId === user.id); const employeeRevenue = items.reduce((sum, item) => sum.add(orderMap.get(item.closedOrderId!)?.total ?? 0), new Prisma.Decimal(0)); return { ...user, won: items.length, revenue: employeeRevenue, channels: [...new Set(items.map((item) => item.channelAccount.name))] }; }).sort((a,b)=>Number(b.revenue)-Number(a.revenue));
+    return { period: { from: start, to: end }, advisedConversations: conversations.length, wonConversations: won.length, conversionRate: conversations.length ? won.length / conversations.length : 0, assistedRevenue: revenue, averageWonValue: won.length ? revenue.div(won.length) : new Prisma.Decimal(0), byEmployee };
+  }
 }

@@ -8,6 +8,7 @@ import { ConversationsService } from './conversations.service';
 import { AssignConversationDto } from './dto/assign-conversation.dto';
 import { ListConversationsDto } from './dto/list-conversations.dto';
 import { SendMessageDto } from './dto/send-message.dto';
+import { CloseSaleDto } from './dto/close-sale.dto';
 
 @Controller('conversations')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -17,5 +18,5 @@ export class ConversationsController {
   @Get(':id') @RequirePermissions('conversations.read') detail(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) { return this.conversations.detail(user, id); }
   @Post(':id/messages') @RequirePermissions('conversations.reply') reply(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() input: SendMessageDto) { return this.conversations.reply(user, id, input); }
   @Post(':id/assign') @RequirePermissions('conversations.reply') assign(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() input: AssignConversationDto) { return this.conversations.assign(user, id, input); }
+  @Post(':id/close-sale') @RequirePermissions('conversations.close_sale') closeSale(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() input: CloseSaleDto) { return this.conversations.closeSale(user, id, input); }
 }
-
