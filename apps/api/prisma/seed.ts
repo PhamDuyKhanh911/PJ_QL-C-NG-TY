@@ -52,6 +52,39 @@ async function main() {
       create: { organizationId: organization.id, code, name, type },
     });
   }
+
+  const branch = await prisma.branch.upsert({
+    where: { organizationId_code: { organizationId: organization.id, code: 'HQ' } },
+    update: {},
+    create: { organizationId: organization.id, code: 'HQ', name: 'Chi nhánh trung tâm' },
+  });
+  const warehouse = await prisma.warehouse.upsert({
+    where: { branchId_code: { branchId: branch.id, code: 'ONLINE' } },
+    update: {},
+    create: { branchId: branch.id, code: 'ONLINE', name: 'Kho bán hàng online' },
+  });
+
+  const sampleProducts = [
+    { product: 'Áo thun Basic', sku: 'AT-BASIC-DEN-M', variant: 'Đen / M', cost: 85000, price: 169000, stock: 18, reorder: 20, safety: 5 },
+    { product: 'Áo thun Basic', sku: 'AT-BASIC-TRANG-L', variant: 'Trắng / L', cost: 85000, price: 169000, stock: 52, reorder: 20, safety: 5 },
+    { product: 'Quần jean Slim', sku: 'QJ-SLIM-XANH-30', variant: 'Xanh / 30', cost: 210000, price: 429000, stock: 9, reorder: 15, safety: 3 },
+    { product: 'Túi đeo chéo', sku: 'TDC-DEN-01', variant: 'Đen', cost: 120000, price: 259000, stock: 41, reorder: 12, safety: 4 },
+  ];
+
+  for (const item of sampleProducts) {
+    let product = await prisma.product.findFirst({ where: { organizationId: organization.id, name: item.product } });
+    product ??= await prisma.product.create({ data: { organizationId: organization.id, name: item.product } });
+    const variant = await prisma.productVariant.upsert({
+      where: { sku: item.sku },
+      update: { name: item.variant, costPrice: item.cost, salePrice: item.price },
+      create: { productId: product.id, sku: item.sku, name: item.variant, costPrice: item.cost, salePrice: item.price },
+    });
+    await prisma.inventoryBalance.upsert({
+      where: { warehouseId_variantId: { warehouseId: warehouse.id, variantId: variant.id } },
+      update: { onHand: item.stock, reorderPoint: item.reorder, safetyStock: item.safety },
+      create: { warehouseId: warehouse.id, variantId: variant.id, onHand: item.stock, reorderPoint: item.reorder, safetyStock: item.safety },
+    });
+  }
 }
 
 main().finally(() => prisma.$disconnect());

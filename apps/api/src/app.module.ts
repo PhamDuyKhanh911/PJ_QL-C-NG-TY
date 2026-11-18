@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { AuthModule } from './auth/auth.module';
+import { CatalogModule } from './catalog/catalog.module';
 import { HealthController } from './health.controller';
+import { InventoryModule } from './inventory/inventory.module';
 import { OrganizationModule } from './organization/organization.module';
 import { PrismaModule } from './prisma/prisma.module';
 
@@ -15,6 +17,8 @@ import { PrismaModule } from './prisma/prisma.module';
     }),
     AuthModule,
     OrganizationModule,
+    CatalogModule,
+    InventoryModule,
   ],
   controllers: [HealthController],
 })
