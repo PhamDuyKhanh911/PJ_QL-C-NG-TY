@@ -12,4 +12,3 @@
     "db:migrate": "pnpm --filter @erp/api prisma:migrate"
   }
 }
-

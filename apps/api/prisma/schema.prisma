@@ -56,6 +56,7 @@ model Organization {
   updatedAt DateTime @updatedAt
   branches  Branch[]
   users     User[]
+  roles     Role[]
   products  Product[]
   channels  SalesChannelAccount[]
   customers Customer[]
@@ -84,11 +85,14 @@ model User {
 }
 
 model Role {
-  id          String   @id @default(cuid())
-  code        String   @unique
+  id             String   @id @default(cuid())
+  organizationId String
+  code           String
   name        String
   permissions Json
+  organization Organization @relation(fields: [organizationId], references: [id])
   assignments UserRoleAssignment[]
+  @@unique([organizationId, code])
 }
 
 model UserRoleAssignment {
@@ -281,4 +285,3 @@ model Message {
   conversation   Conversation @relation(fields: [conversationId], references: [id])
   @@unique([conversationId, externalId])
 }
-

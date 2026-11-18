@@ -21,12 +21,28 @@ docker compose up -d
 pnpm install
 pnpm db:generate
 pnpm db:migrate
+pnpm --filter @erp/api prisma:seed
 pnpm dev
 ```
 
 - Web: http://localhost:3000
 - API: http://localhost:4000/api
 - Health check: http://localhost:4000/api/health
+
+### Tài khoản phát triển
+
+Sau khi chạy seed:
+
+- Email: `admin@local.test`
+- Mật khẩu mặc định: giá trị `SEED_ADMIN_PASSWORD` trong `.env`
+
+Đổi mật khẩu seed và `JWT_SECRET` trước khi dùng trên môi trường thật.
+
+### API xác thực đầu tiên
+
+- `POST /api/auth/login`: đăng nhập bằng email/mật khẩu.
+- `GET /api/auth/me`: hồ sơ, quyền và phạm vi của tài khoản hiện tại.
+- `GET /api/organization/overview`: tổng quan tổ chức; yêu cầu quyền `organization.read` hoặc `*`.
 
 ## Nguyên tắc nghiệp vụ
 
@@ -36,4 +52,3 @@ pnpm dev
 - Quyền truy cập kết hợp vai trò, hành động và phạm vi dữ liệu.
 - Hủy, hoàn và đổi trả lưu riêng nguyên nhân và bên chịu trách nhiệm.
 - Mọi webhook phải chống xử lý trùng bằng mã sự kiện ngoài hệ thống.
-
