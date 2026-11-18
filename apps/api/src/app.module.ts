@@ -9,6 +9,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { SalesModule } from './sales/sales.module';
 import { AdministrationModule } from './administration/administration.module';
 import { ConversationsModule } from './conversations/conversations.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { ConversationsModule } from './conversations/conversations.module';
     SalesModule,
     AdministrationModule,
     ConversationsModule,
+    DashboardModule,
   ],
   controllers: [HealthController],
 })
