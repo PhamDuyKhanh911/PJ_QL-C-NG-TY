@@ -319,7 +319,24 @@ model SalesOrder {
   customer         Customer? @relation(fields: [customerId], references: [id])
   items            SalesOrderItem[]
   afterSales       AfterSaleRequest[]
+  fulfillmentEvents OrderFulfillmentEvent[]
   @@unique([channelAccountId, externalOrderId])
+}
+
+model OrderFulfillmentEvent {
+  id            String @id @default(cuid())
+  orderId       String
+  action        String
+  fromStatus    OrderStatus
+  toStatus      OrderStatus
+  performedById String
+  carrierName   String?
+  trackingCode  String?
+  note          String?
+  createdAt     DateTime @default(now())
+  order         SalesOrder @relation(fields: [orderId], references: [id])
+  @@index([orderId, createdAt])
+  @@index([performedById, createdAt])
 }
 
 model SalesOrderItem {

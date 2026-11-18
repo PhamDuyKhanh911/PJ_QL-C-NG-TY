@@ -1,11 +1,12 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { AfterSaleType, InventoryTransactionType, OrderStatus, Prisma } from '@prisma/client';
+import { AfterSaleType, ChannelType, InventoryTransactionType, OrderStatus, Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { CancelOrderDto } from './dto/cancel-order.dto';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { ListOrdersDto } from './dto/list-orders.dto';
 import { queueInventorySync } from '../channels/queue-inventory-sync';
+import { SyncMarketplaceOrderDto } from './dto/sync-marketplace-order.dto';
 
 @Injectable()
 export class SalesService {
@@ -32,6 +33,7 @@ export class SalesService {
       this.prisma.productVariant.findMany({ where: { id: { in: input.items.map((item) => item.variantId) }, product: { organizationId, active: true } } }),
     ]);
     if (!channel || !warehouse || variants.length !== new Set(input.items.map((item) => item.variantId)).size) throw new NotFoundException('Kênh bán, kho hoặc SKU không hợp lệ');
+    if (channel.type === ChannelType.SHOPEE || channel.type === ChannelType.TIKTOK_SHOP) throw new BadRequestException('Đơn Shopee/TikTok phải đồng bộ tự động từ seller, không nhập tay');
     const variantMap = new Map(variants.map((variant) => [variant.id, variant]));
     const subtotal = input.items.reduce((sum, item) => sum.add(variantMap.get(item.variantId)!.salePrice.mul(item.quantity)), new Prisma.Decimal(0));
     const discount = new Prisma.Decimal(input.discount);
@@ -71,6 +73,40 @@ export class SalesService {
       });
       await queueInventorySync(tx, input.items.map((item) => item.variantId), performedById, 'ORDER_RESERVED');
       return order;
+    });
+  }
+
+  async syncMarketplace(organizationId: string, performedById: string, input: SyncMarketplaceOrderDto) {
+    const existing = await this.prisma.salesOrder.findFirst({ where: { channelAccountId: input.channelAccountId, externalOrderId: input.externalOrderId, channelAccount: { organizationId } }, include: { items: true } });
+    if (existing) return { order: existing, duplicated: true };
+    const [channel, warehouse, mappings] = await Promise.all([
+      this.prisma.salesChannelAccount.findFirst({ where: { id: input.channelAccountId, organizationId, active: true, type: { in: [ChannelType.SHOPEE, ChannelType.TIKTOK_SHOP] } } }),
+      this.prisma.warehouse.findFirst({ where: { id: input.warehouseId, branch: { organizationId } } }),
+      this.prisma.channelSkuMapping.findMany({ where: { channelAccountId: input.channelAccountId, externalSkuId: { in: input.items.map((item) => item.externalSkuId) } }, include: { variant: true } }),
+    ]);
+    if (!channel || !warehouse) throw new NotFoundException('Seller hoặc kho nhận đơn không hợp lệ');
+    const mappingByExternalSku = new Map(mappings.map((mapping) => [mapping.externalSkuId, mapping]));
+    const missing = input.items.filter((item) => !mappingByExternalSku.has(item.externalSkuId));
+    if (missing.length) throw new BadRequestException(`SKU sàn chưa ánh xạ: ${missing.map((item) => item.externalSkuId).join(', ')}`);
+    const orderId = randomUUID();
+    return this.prisma.$transaction(async (tx) => {
+      const duplicate = await tx.salesOrder.findFirst({ where: { channelAccountId: channel.id, externalOrderId: input.externalOrderId } });
+      if (duplicate) return { order: duplicate, duplicated: true };
+      const normalized = input.items.map((item) => ({ ...item, variant: mappingByExternalSku.get(item.externalSkuId)!.variant }));
+      for (const item of normalized) {
+        const reserved = await tx.$executeRaw(Prisma.sql`
+          UPDATE "InventoryBalance" SET "reserved" = "reserved" + ${item.quantity}
+          WHERE "warehouseId" = ${warehouse.id} AND "variantId" = ${item.variant.id}
+            AND ("onHand" - "reserved" - "quarantined" - "safetyStock") >= ${item.quantity}
+        `);
+        if (reserved !== 1) throw new BadRequestException(`Không đủ tồn cho SKU sàn ${item.externalSkuId}; đơn chưa được xác nhận`);
+        await tx.inventoryTransaction.create({ data: { warehouseId: warehouse.id, variantId: item.variant.id, type: InventoryTransactionType.RESERVATION, quantity: item.quantity, reason: `Giữ tồn từ đơn đồng bộ ${channel.name}`, referenceType: 'SALES_ORDER', referenceId: orderId, performedById } });
+      }
+      const subtotal = normalized.reduce((sum, item) => sum.add(item.variant.salePrice.mul(item.quantity)), new Prisma.Decimal(0));
+      const customer = input.customerName ? await tx.customer.create({ data: { organizationId, displayName: input.customerName } }) : null;
+      const order = await tx.salesOrder.create({ data: { id: orderId, orderNumber: `${channel.code}-${input.externalOrderId}`, channelAccountId: channel.id, warehouseId: warehouse.id, customerId: customer?.id, externalOrderId: input.externalOrderId, status: OrderStatus.CONFIRMED, subtotal, total: subtotal, orderedAt: new Date(input.orderedAt), items: { create: normalized.map((item) => ({ variantId: item.variant.id, quantity: item.quantity, unitPrice: item.variant.salePrice })) } }, include: { items: true, channelAccount: true, warehouse: true } });
+      await queueInventorySync(tx, normalized.map((item) => item.variant.id), performedById, 'MARKETPLACE_ORDER_SYNCED');
+      return { order, duplicated: false };
     });
   }
 

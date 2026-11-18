@@ -15,6 +15,7 @@ import { ChannelsModule } from './channels/channels.module';
 import { AfterSalesModule } from './after-sales/after-sales.module';
 import { ReportsModule } from './reports/reports.module';
 import { PurchasingModule } from './purchasing/purchasing.module';
+import { FulfillmentModule } from './fulfillment/fulfillment.module';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { PurchasingModule } from './purchasing/purchasing.module';
     AfterSalesModule,
     ReportsModule,
     PurchasingModule,
+    FulfillmentModule,
   ],
   controllers: [HealthController],
 })

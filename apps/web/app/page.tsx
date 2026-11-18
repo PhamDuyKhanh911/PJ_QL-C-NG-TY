@@ -55,7 +55,7 @@ export default function Dashboard() {
         <div className="brand"><span>Q</span><div>QUẢN TRỊ<small>Doanh nghiệp đa kênh</small></div></div>
         <nav>
           <a className="active">Tổng quan</a>
-          <a href="/orders">Đơn hàng</a><a href="/after-sales">Hậu mãi</a><a>Bán hàng POS</a><a>Sản phẩm</a><a href="/inventory">Kho hàng</a><a href="/inventory/transactions">Sổ giao dịch kho</a><a href="/inventory/quarantine">Kiểm định hàng hoàn</a>
+          <a href="/orders">Đơn hàng</a><a href="/fulfillment">Xuất kho</a><a href="/after-sales">Hậu mãi</a><a>Bán hàng POS</a><a>Sản phẩm</a><a href="/inventory">Kho hàng</a><a href="/inventory/transactions">Sổ giao dịch kho</a><a href="/inventory/quarantine">Kiểm định hàng hoàn</a>
           <a href="/channels">Kênh bán hàng</a><a href="/inbox">Hộp thư chung {data && data.stats.unrepliedConversations > 0 && <b>{data.stats.unrepliedConversations}</b>}</a><a href="/assisted-sales">Chốt đơn qua chat</a><a href="/customers">Khách hàng</a>
           <a href="/purchasing">Mua hàng</a><a href="/reports">Báo cáo</a><a href="/reports/channels">Phát triển kênh</a><a href="/staff">Nhân viên & phân quyền</a><a>Cấu hình</a>
         </nav>
