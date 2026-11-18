@@ -56,7 +56,7 @@ export default function Dashboard() {
         <nav>
           <a className="active">Tổng quan</a>
           <a href="/orders">Đơn hàng</a><a>Bán hàng POS</a><a>Sản phẩm</a><a href="/inventory">Kho hàng</a>
-          <a>Kênh bán hàng</a><a href="/inbox">Hộp thư chung {data && data.stats.unrepliedConversations > 0 && <b>{data.stats.unrepliedConversations}</b>}</a><a href="/customers">Khách hàng</a>
+          <a href="/channels">Kênh bán hàng</a><a href="/inbox">Hộp thư chung {data && data.stats.unrepliedConversations > 0 && <b>{data.stats.unrepliedConversations}</b>}</a><a href="/customers">Khách hàng</a>
           <a>Mua hàng</a><a>Báo cáo</a><a href="/staff">Nhân viên & phân quyền</a><a>Cấu hình</a>
         </nav>
         <button className="user" onClick={logout}><i>AD</i><div>Quản trị viên<small>Đăng xuất</small></div></button>

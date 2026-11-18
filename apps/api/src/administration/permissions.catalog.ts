@@ -14,4 +14,6 @@ export const PERMISSION_CATALOG = [
   { code: 'conversations.read', group: 'CSKH', name: 'Xem hội thoại' },
   { code: 'conversations.reply', group: 'CSKH', name: 'Trả lời hội thoại' },
   { code: 'customers.read', group: 'CSKH', name: 'Xem hồ sơ khách hàng' },
+  { code: 'channels.read', group: 'Kênh bán', name: 'Xem trạng thái kênh bán' },
+  { code: 'channels.sync', group: 'Kênh bán', name: 'Thực hiện đồng bộ tồn kho' },
 ] as const;

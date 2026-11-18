@@ -11,6 +11,7 @@ import { AdministrationModule } from './administration/administration.module';
 import { ConversationsModule } from './conversations/conversations.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { CustomersModule } from './customers/customers.module';
+import { ChannelsModule } from './channels/channels.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { CustomersModule } from './customers/customers.module';
     ConversationsModule,
     DashboardModule,
     CustomersModule,
+    ChannelsModule,
   ],
   controllers: [HealthController],
 })

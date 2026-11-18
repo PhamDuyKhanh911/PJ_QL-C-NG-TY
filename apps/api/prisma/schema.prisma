@@ -49,6 +49,12 @@ enum AfterSaleType {
   REFUND
 }
 
+enum ChannelSyncStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
 model Organization {
   id        String   @id @default(cuid())
   name      String
@@ -184,7 +190,25 @@ model SalesChannelAccount {
   skuMappings    ChannelSkuMapping[]
   orders         SalesOrder[]
   conversations  Conversation[]
+  syncRuns       ChannelSyncRun[]
   @@unique([organizationId, code])
+}
+
+model ChannelSyncRun {
+  id               String @id @default(cuid())
+  channelAccountId String
+  status           ChannelSyncStatus @default(RUNNING)
+  direction        String @default("PUSH_INVENTORY")
+  mappedSkuCount   Int @default(0)
+  processedCount   Int @default(0)
+  failedCount      Int @default(0)
+  snapshot         Json?
+  errorMessage     String?
+  triggeredById    String?
+  startedAt        DateTime @default(now())
+  completedAt      DateTime?
+  channelAccount   SalesChannelAccount @relation(fields: [channelAccountId], references: [id])
+  @@index([channelAccountId, startedAt])
 }
 
 model ChannelSkuMapping {

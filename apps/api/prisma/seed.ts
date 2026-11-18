@@ -39,7 +39,7 @@ async function main() {
   });
 
   const defaultRoles = [
-    { code: 'ONLINE_MANAGER', name: 'Quản lý bán hàng online', permissions: ['organization.read', 'catalog.read', 'inventory.read', 'sales.read', 'sales.create', 'sales.cancel', 'reports.sales', 'conversations.read', 'conversations.reply', 'customers.read'] },
+    { code: 'ONLINE_MANAGER', name: 'Quản lý bán hàng online', permissions: ['organization.read', 'catalog.read', 'inventory.read', 'sales.read', 'sales.create', 'sales.cancel', 'reports.sales', 'conversations.read', 'conversations.reply', 'customers.read', 'channels.read', 'channels.sync'] },
     { code: 'WAREHOUSE_STAFF', name: 'Nhân viên kho', permissions: ['catalog.read', 'inventory.read', 'inventory.adjust', 'sales.read'] },
     { code: 'CUSTOMER_SERVICE', name: 'Nhân viên chăm sóc khách hàng', permissions: ['sales.read', 'conversations.read', 'conversations.reply', 'customers.read'] },
     { code: 'SALES_STAFF', name: 'Nhân viên bán hàng', permissions: ['catalog.read', 'inventory.read', 'sales.read', 'sales.create'] },
@@ -127,6 +127,15 @@ async function main() {
   const seededVariants = await prisma.productVariant.findMany({ where: { sku: { in: sampleProducts.map((item) => item.sku) } } });
   const channelByCode = new Map(seededChannels.map((item) => [item.code, item]));
   const variantBySku = new Map(seededVariants.map((item) => [item.sku, item]));
+  for (const channel of seededChannels.filter((item) => [ChannelType.TIKTOK_SHOP, ChannelType.SHOPEE].includes(item.type))) {
+    for (const variant of seededVariants) {
+      await prisma.channelSkuMapping.upsert({
+        where: { channelAccountId_externalSkuId: { channelAccountId: channel.id, externalSkuId: `${channel.code}-${variant.sku}` } },
+        update: { externalSku: variant.sku },
+        create: { channelAccountId: channel.id, variantId: variant.id, externalProductId: `${channel.code}-PRODUCT-${variant.productId}`, externalSkuId: `${channel.code}-${variant.sku}`, externalSku: variant.sku },
+      });
+    }
+  }
   const sampleOrders = [
     { number: 'DEMO-1001', channel: 'TIKTOK_01', sku: 'AT-BASIC-DEN-M', status: 'DELIVERED', days: 1 },
     { number: 'DEMO-1002', channel: 'SHOPEE_01', sku: 'AT-BASIC-TRANG-L', status: 'DELIVERED', days: 2 },
