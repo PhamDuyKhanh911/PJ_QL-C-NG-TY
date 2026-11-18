@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../auth/permissions.decorator';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { AdjustInventoryDto } from './dto/adjust-inventory.dto';
+import { InspectQuarantineDto } from './dto/inspect-quarantine.dto';
 import { InventoryService } from './inventory.service';
 
 @Controller('inventory')
@@ -15,5 +16,8 @@ export class InventoryController {
   alerts(@CurrentUser() user: AuthenticatedUser) { return this.inventory.alerts(user.organizationId); }
   @Post('adjustments') @RequirePermissions('inventory.adjust')
   adjust(@CurrentUser() user: AuthenticatedUser, @Body() input: AdjustInventoryDto) { return this.inventory.adjust(user.organizationId, user.id, input); }
+  @Get('quarantine') @RequirePermissions('inventory.read')
+  quarantine(@CurrentUser() user: AuthenticatedUser) { return this.inventory.quarantine(user.organizationId); }
+  @Post('quarantine/inspect') @RequirePermissions('inventory.inspect_returns')
+  inspect(@CurrentUser() user: AuthenticatedUser, @Body() input: InspectQuarantineDto) { return this.inventory.inspectQuarantine(user.organizationId, user.id, input); }
 }
-

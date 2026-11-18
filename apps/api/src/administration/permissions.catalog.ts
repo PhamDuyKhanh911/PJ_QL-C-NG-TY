@@ -7,6 +7,7 @@ export const PERMISSION_CATALOG = [
   { code: 'catalog.create', group: 'Sản phẩm', name: 'Tạo sản phẩm' },
   { code: 'inventory.read', group: 'Kho', name: 'Xem tồn kho' },
   { code: 'inventory.adjust', group: 'Kho', name: 'Điều chỉnh tồn kho' },
+  { code: 'inventory.inspect_returns', group: 'Kho', name: 'Kiểm định và xử lý hàng hoàn' },
   { code: 'sales.read', group: 'Bán hàng', name: 'Xem đơn hàng' },
   { code: 'sales.create', group: 'Bán hàng', name: 'Tạo đơn hàng' },
   { code: 'sales.cancel', group: 'Bán hàng', name: 'Hủy đơn hàng' },

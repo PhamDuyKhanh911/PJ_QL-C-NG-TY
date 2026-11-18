@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { InventoryTransactionType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdjustInventoryDto } from './dto/adjust-inventory.dto';
+import { InspectQuarantineDto, QuarantineDecision } from './dto/inspect-quarantine.dto';
 
 @Injectable()
 export class InventoryService {
@@ -17,6 +18,22 @@ export class InventoryService {
       .map((item) => ({ ...item, available: item.onHand - item.reserved - item.quarantined - item.safetyStock }))
       .filter((item) => item.available <= item.reorderPoint)
       .sort((a, b) => a.available - b.available);
+  }
+
+  quarantine(organizationId: string) {
+    return this.prisma.inventoryBalance.findMany({ where: { quarantined: { gt: 0 }, warehouse: { branch: { organizationId } } }, include: { warehouse: { include: { branch: true } }, variant: { include: { product: true } } }, orderBy: [{ warehouse: { name: 'asc' } }, { variant: { sku: 'asc' } }] });
+  }
+
+  async inspectQuarantine(organizationId: string, userId: string, input: InspectQuarantineDto) {
+    const balance = await this.prisma.inventoryBalance.findFirst({ where: { id: input.balanceId, warehouse: { branch: { organizationId } } }, include: { variant: true } });
+    if (!balance) throw new NotFoundException('Không tìm thấy tồn kho cách ly');
+    if (balance.quarantined < input.quantity) throw new BadRequestException('Số lượng xử lý vượt quá hàng đang cách ly');
+    return this.prisma.$transaction(async (tx) => {
+      const update = await tx.inventoryBalance.updateMany({ where: { id: balance.id, quarantined: { gte: input.quantity }, ...(input.decision === QuarantineDecision.WRITE_OFF ? { onHand: { gte: input.quantity } } : {}) }, data: { quarantined: { decrement: input.quantity }, ...(input.decision === QuarantineDecision.WRITE_OFF ? { onHand: { decrement: input.quantity } } : {}) } });
+      if (update.count !== 1) throw new BadRequestException('Tồn cách ly đã thay đổi, vui lòng tải lại');
+      await tx.inventoryTransaction.create({ data: { warehouseId: balance.warehouseId, variantId: balance.variantId, type: input.decision === QuarantineDecision.RELEASE ? InventoryTransactionType.QUARANTINE : InventoryTransactionType.RETURN_OUT, quantity: input.decision === QuarantineDecision.RELEASE ? input.quantity : -input.quantity, reason: `${input.decision}|${input.reason}`, referenceType: 'RETURN_INSPECTION', referenceId: balance.id, performedById: userId } });
+      return tx.inventoryBalance.findUnique({ where: { id: balance.id }, include: { warehouse: true, variant: { include: { product: true } } } });
+    });
   }
 
   async adjust(organizationId: string, performedById: string, input: AdjustInventoryDto) {
@@ -55,4 +72,3 @@ export class InventoryService {
     });
   }
 }
-
