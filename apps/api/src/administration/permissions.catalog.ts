@@ -21,4 +21,7 @@ export const PERMISSION_CATALOG = [
   { code: 'after_sales.read', group: 'Hậu mãi', name: 'Xem yêu cầu hủy hoàn đổi trả' },
   { code: 'after_sales.manage', group: 'Hậu mãi', name: 'Tạo và xử lý yêu cầu hậu mãi' },
   { code: 'after_sales.receive', group: 'Hậu mãi', name: 'Xác nhận hàng hoàn đã về kho' },
+  { code: 'purchasing.read', group: 'Mua hàng', name: 'Xem đề xuất và đơn mua hàng' },
+  { code: 'purchasing.manage', group: 'Mua hàng', name: 'Tạo và quản lý đơn mua hàng' },
+  { code: 'purchasing.receive', group: 'Mua hàng', name: 'Xác nhận hàng mua thực nhận tại kho' },
 ] as const;

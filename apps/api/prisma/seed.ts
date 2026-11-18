@@ -39,11 +39,12 @@ async function main() {
   });
 
   const defaultRoles = [
-    { code: 'ONLINE_MANAGER', name: 'Quản lý bán hàng online', permissions: ['organization.read', 'catalog.read', 'inventory.read', 'sales.read', 'sales.create', 'sales.cancel', 'reports.sales', 'conversations.read', 'conversations.reply', 'conversations.close_sale', 'customers.read', 'channels.read', 'channels.sync', 'after_sales.read', 'after_sales.manage'] },
-    { code: 'WAREHOUSE_STAFF', name: 'Nhân viên kho', permissions: ['catalog.read', 'inventory.read', 'inventory.adjust', 'inventory.inspect_returns', 'sales.read', 'after_sales.read', 'after_sales.receive'] },
+    { code: 'ONLINE_MANAGER', name: 'Quản lý bán hàng online', permissions: ['organization.read', 'catalog.read', 'inventory.read', 'sales.read', 'sales.create', 'sales.cancel', 'reports.sales', 'conversations.read', 'conversations.reply', 'conversations.close_sale', 'customers.read', 'channels.read', 'channels.sync', 'after_sales.read', 'after_sales.manage', 'purchasing.read'] },
+    { code: 'WAREHOUSE_STAFF', name: 'Nhân viên kho', permissions: ['catalog.read', 'inventory.read', 'inventory.adjust', 'inventory.inspect_returns', 'sales.read', 'after_sales.read', 'after_sales.receive', 'purchasing.read', 'purchasing.receive'] },
     { code: 'CUSTOMER_SERVICE', name: 'Nhân viên chăm sóc khách hàng', permissions: ['sales.read', 'reports.sales', 'conversations.read', 'conversations.reply', 'conversations.close_sale', 'customers.read', 'after_sales.read', 'after_sales.manage'] },
     { code: 'SALES_STAFF', name: 'Nhân viên bán hàng', permissions: ['catalog.read', 'inventory.read', 'sales.read', 'sales.create'] },
     { code: 'REPORT_VIEWER', name: 'Nhân viên báo cáo', permissions: ['organization.read', 'inventory.read', 'sales.read', 'reports.sales'] },
+    { code: 'PURCHASING_STAFF', name: 'Nhân viên mua hàng', permissions: ['catalog.read', 'inventory.read', 'purchasing.read', 'purchasing.manage'] },
   ];
   const seededRoles = new Map<string, { id: string }>();
   for (const item of defaultRoles) {
@@ -99,6 +100,11 @@ async function main() {
     where: { branchId_code: { branchId: branch.id, code: 'ONLINE' } },
     update: {},
     create: { branchId: branch.id, code: 'ONLINE', name: 'Kho bán hàng online' },
+  });
+  await prisma.supplier.upsert({
+    where: { organizationId_code: { organizationId: organization.id, code: 'NCC-DEMO' } },
+    update: { name: 'Nhà cung cấp Demo', phone: '0900000000' },
+    create: { organizationId: organization.id, code: 'NCC-DEMO', name: 'Nhà cung cấp Demo', phone: '0900000000', email: 'supplier@example.test' },
   });
 
   const sampleProducts = [

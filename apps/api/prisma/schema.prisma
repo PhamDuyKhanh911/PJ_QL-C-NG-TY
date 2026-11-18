@@ -55,6 +55,14 @@ enum ChannelSyncStatus {
   FAILED
 }
 
+enum PurchaseOrderStatus {
+  DRAFT
+  ORDERED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
 model Organization {
   id        String   @id @default(cuid())
   name      String
@@ -67,6 +75,8 @@ model Organization {
   products  Product[]
   channels  SalesChannelAccount[]
   customers Customer[]
+  suppliers Supplier[]
+  purchaseOrders PurchaseOrder[]
 }
 
 model Branch {
@@ -135,6 +145,7 @@ model ProductVariant {
   balances  InventoryBalance[]
   mappings  ChannelSkuMapping[]
   orderItems SalesOrderItem[]
+  purchaseItems PurchaseOrderItem[]
 }
 
 model Warehouse {
@@ -146,7 +157,52 @@ model Warehouse {
   balances InventoryBalance[]
   transactions InventoryTransaction[]
   orders   SalesOrder[]
+  purchaseOrders PurchaseOrder[]
   @@unique([branchId, code])
+}
+
+model Supplier {
+  id             String @id @default(cuid())
+  organizationId String
+  code           String
+  name           String
+  phone          String?
+  email          String?
+  active         Boolean @default(true)
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  purchaseOrders PurchaseOrder[]
+  @@unique([organizationId, code])
+}
+
+model PurchaseOrder {
+  id             String @id @default(cuid())
+  organizationId String
+  supplierId     String
+  warehouseId    String
+  orderNumber    String @unique
+  status         PurchaseOrderStatus @default(DRAFT)
+  expectedAt     DateTime?
+  note           String?
+  createdById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  supplier       Supplier @relation(fields: [supplierId], references: [id])
+  warehouse      Warehouse @relation(fields: [warehouseId], references: [id])
+  items          PurchaseOrderItem[]
+  @@index([organizationId, status, createdAt])
+}
+
+model PurchaseOrderItem {
+  id                String @id @default(cuid())
+  purchaseOrderId   String
+  variantId         String
+  orderedQuantity   Int
+  receivedQuantity  Int @default(0)
+  unitCost          Decimal @db.Decimal(18, 2)
+  purchaseOrder     PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  variant           ProductVariant @relation(fields: [variantId], references: [id])
+  @@unique([purchaseOrderId, variantId])
 }
 
 model InventoryBalance {
