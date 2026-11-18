@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CancelOrderDto } from './dto/cancel-order.dto';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { ListOrdersDto } from './dto/list-orders.dto';
+import { queueInventorySync } from '../channels/queue-inventory-sync';
 
 @Injectable()
 export class SalesService {
@@ -62,6 +63,7 @@ export class SalesService {
         },
         include: { items: true, channelAccount: true, warehouse: true, customer: true },
       });
+      await queueInventorySync(tx, input.items.map((item) => item.variantId), performedById, 'ORDER_RESERVED');
       return order;
     });
   }
@@ -75,6 +77,7 @@ export class SalesService {
         await tx.inventoryBalance.update({ where: { warehouseId_variantId: { warehouseId: order.warehouseId!, variantId: item.variantId } }, data: { reserved: { decrement: item.quantity } } });
         await tx.inventoryTransaction.create({ data: { warehouseId: order.warehouseId!, variantId: item.variantId, type: InventoryTransactionType.RESERVATION_RELEASE, quantity: item.quantity, reason: input.reasonCode, referenceType: 'SALES_ORDER', referenceId: order.id, performedById } });
       }
+      await queueInventorySync(tx, order.items.map((item) => item.variantId), performedById, 'ORDER_CANCELLED');
       return tx.salesOrder.update({ where: { id: order.id }, data: { status: OrderStatus.CANCELLED, afterSales: { create: { type: AfterSaleType.CANCELLATION, reasonCode: input.reasonCode, responsibleParty: input.responsibleParty, quantity: order.items.reduce((sum, item) => sum + item.quantity, 0), status: 'COMPLETED' } } }, include: { afterSales: true } });
     });
   }

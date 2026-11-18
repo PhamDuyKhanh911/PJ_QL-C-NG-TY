@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AdjustInventoryDto } from './dto/adjust-inventory.dto';
 import { InspectQuarantineDto, QuarantineDecision } from './dto/inspect-quarantine.dto';
 import { ListInventoryTransactionsDto } from './dto/list-inventory-transactions.dto';
+import { queueInventorySync } from '../channels/queue-inventory-sync';
 
 @Injectable()
 export class InventoryService {
@@ -43,6 +44,7 @@ export class InventoryService {
       const update = await tx.inventoryBalance.updateMany({ where: { id: balance.id, quarantined: { gte: input.quantity }, ...(input.decision === QuarantineDecision.WRITE_OFF ? { onHand: { gte: input.quantity } } : {}) }, data: { quarantined: { decrement: input.quantity }, ...(input.decision === QuarantineDecision.WRITE_OFF ? { onHand: { decrement: input.quantity } } : {}) } });
       if (update.count !== 1) throw new BadRequestException('Tồn cách ly đã thay đổi, vui lòng tải lại');
       await tx.inventoryTransaction.create({ data: { warehouseId: balance.warehouseId, variantId: balance.variantId, type: input.decision === QuarantineDecision.RELEASE ? InventoryTransactionType.QUARANTINE : InventoryTransactionType.RETURN_OUT, quantity: input.decision === QuarantineDecision.RELEASE ? input.quantity : -input.quantity, reason: `${input.decision}|${input.reason}`, referenceType: 'RETURN_INSPECTION', referenceId: balance.id, performedById: userId } });
+      await queueInventorySync(tx, [balance.variantId], userId, input.decision === QuarantineDecision.RELEASE ? 'QUARANTINE_RELEASE' : 'RETURN_WRITE_OFF');
       return tx.inventoryBalance.findUnique({ where: { id: balance.id }, include: { warehouse: true, variant: { include: { product: true } } } });
     });
   }
@@ -79,6 +81,7 @@ export class InventoryService {
           performedById,
         },
       });
+      await queueInventorySync(tx, [variant.id], performedById, 'MANUAL_ADJUSTMENT');
       return balance;
     });
   }

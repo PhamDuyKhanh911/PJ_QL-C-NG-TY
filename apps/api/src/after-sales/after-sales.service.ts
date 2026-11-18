@@ -3,6 +3,7 @@ import { AfterSaleType, InventoryTransactionType, OrderStatus } from '@prisma/cl
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateAfterSaleDto } from './dto/create-after-sale.dto';
 import { ResolveAfterSaleDto } from './dto/resolve-after-sale.dto';
+import { queueInventorySync } from '../channels/queue-inventory-sync';
 
 @Injectable()
 export class AfterSalesService {
@@ -40,6 +41,7 @@ export class AfterSalesService {
     return this.prisma.$transaction(async (tx) => {
       await tx.inventoryBalance.update({ where: { warehouseId_variantId: { warehouseId: request.order.warehouseId!, variantId } }, data: { quarantined: { increment: request.quantity }, onHand: { increment: request.quantity } } });
       await tx.inventoryTransaction.create({ data: { warehouseId: request.order.warehouseId!, variantId, type: InventoryTransactionType.RETURN_IN, quantity: request.quantity, reason: `RECEIVED_RETURN|${note ?? 'WAREHOUSE_CONFIRMED'}`, referenceType: 'AFTER_SALE', referenceId: request.id, performedById: userId } });
+      await queueInventorySync(tx, [variantId], userId, 'RETURN_RECEIVED');
       const returnTypes: AfterSaleType[] = [AfterSaleType.RETURN, AfterSaleType.EXCHANGE];
       const receivedQuantity = request.order.afterSales.filter((item) => item.status === 'COMPLETED' && returnTypes.includes(item.type)).reduce((sum, item) => sum + item.quantity, 0) + request.quantity;
       const orderedQuantity = request.order.items.reduce((sum, item) => sum + item.quantity, 0);
