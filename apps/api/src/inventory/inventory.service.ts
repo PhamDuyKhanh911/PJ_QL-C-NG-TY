@@ -3,6 +3,7 @@ import { InventoryTransactionType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdjustInventoryDto } from './dto/adjust-inventory.dto';
 import { InspectQuarantineDto, QuarantineDecision } from './dto/inspect-quarantine.dto';
+import { ListInventoryTransactionsDto } from './dto/list-inventory-transactions.dto';
 
 @Injectable()
 export class InventoryService {
@@ -18,6 +19,16 @@ export class InventoryService {
       .map((item) => ({ ...item, available: item.onHand - item.reserved - item.quarantined - item.safetyStock }))
       .filter((item) => item.available <= item.reorderPoint)
       .sort((a, b) => a.available - b.available);
+  }
+
+  async transactions(organizationId: string, query: ListInventoryTransactionsDto) {
+    const matchingVariants = query.search ? await this.prisma.productVariant.findMany({ where: { product: { organizationId }, OR: [{ sku: { contains: query.search, mode: 'insensitive' } }, { name: { contains: query.search, mode: 'insensitive' } }, { product: { name: { contains: query.search, mode: 'insensitive' } } }] }, select: { id: true } }) : [];
+    const where = { warehouse: { branch: { organizationId } }, ...(query.type ? { type: query.type } : {}), ...(query.search ? { variantId: { in: matchingVariants.map((item) => item.id) } } : {}), ...(query.from || query.to ? { createdAt: { ...(query.from ? { gte: new Date(query.from) } : {}), ...(query.to ? { lte: new Date(query.to) } : {}) } } : {}) };
+    const [rows, total] = await Promise.all([this.prisma.inventoryTransaction.findMany({ where, include: { warehouse: { include: { branch: true } } }, orderBy: { createdAt: 'desc' }, skip: (query.page - 1) * query.limit, take: query.limit }), this.prisma.inventoryTransaction.count({ where })]);
+    const variantIds = [...new Set(rows.map((item) => item.variantId))]; const userIds = [...new Set(rows.flatMap((item) => item.performedById ? [item.performedById] : []))];
+    const [variants, users] = await Promise.all([this.prisma.productVariant.findMany({ where: { id: { in: variantIds } }, include: { product: true } }), this.prisma.user.findMany({ where: { id: { in: userIds }, organizationId }, select: { id: true, displayName: true, email: true } })]);
+    const variantMap = new Map(variants.map((item) => [item.id, item])); const userMap = new Map(users.map((item) => [item.id, item]));
+    return { data: rows.map((item) => ({ ...item, variant: variantMap.get(item.variantId) ?? null, performedBy: item.performedById ? userMap.get(item.performedById) ?? null : null })), meta: { total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) } };
   }
 
   quarantine(organizationId: string) {

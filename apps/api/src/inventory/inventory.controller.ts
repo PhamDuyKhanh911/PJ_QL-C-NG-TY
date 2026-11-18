@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -6,6 +6,7 @@ import { RequirePermissions } from '../auth/permissions.decorator';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { AdjustInventoryDto } from './dto/adjust-inventory.dto';
 import { InspectQuarantineDto } from './dto/inspect-quarantine.dto';
+import { ListInventoryTransactionsDto } from './dto/list-inventory-transactions.dto';
 import { InventoryService } from './inventory.service';
 
 @Controller('inventory')
@@ -20,4 +21,6 @@ export class InventoryController {
   quarantine(@CurrentUser() user: AuthenticatedUser) { return this.inventory.quarantine(user.organizationId); }
   @Post('quarantine/inspect') @RequirePermissions('inventory.inspect_returns')
   inspect(@CurrentUser() user: AuthenticatedUser, @Body() input: InspectQuarantineDto) { return this.inventory.inspectQuarantine(user.organizationId, user.id, input); }
+  @Get('transactions') @RequirePermissions('inventory.read')
+  transactions(@CurrentUser() user: AuthenticatedUser, @Query() query: ListInventoryTransactionsDto) { return this.inventory.transactions(user.organizationId, query); }
 }
