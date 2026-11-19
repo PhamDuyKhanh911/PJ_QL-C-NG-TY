@@ -4,5 +4,6 @@ import { SyncSettlementsDto } from './dto/sync-settlements.dto';import { Reconci
 @Controller('reconciliation') @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class ReconciliationController { constructor(private readonly reconciliation: ReconciliationService) {}
   @Get('summary') @RequirePermissions('reconciliation.read') summary(@CurrentUser() user: AuthenticatedUser) { return this.reconciliation.summary(user.organizationId); }
+  @Get('receivables') @RequirePermissions('reconciliation.read') receivables(@CurrentUser() user: AuthenticatedUser) { return this.reconciliation.receivables(user.organizationId); }
   @Post('sync') @RequirePermissions('reconciliation.sync') sync(@CurrentUser() user: AuthenticatedUser, @Body() input: SyncSettlementsDto) { return this.reconciliation.sync(user.organizationId, user.id, input); }
 }

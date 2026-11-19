@@ -97,7 +97,7 @@ export default function ReconciliationPage() {
           <h1>Đối soát doanh thu & tiền về</h1>
           <span>Online dùng chi phí tổng; offline chỉ theo dõi thêm chi phí vận chuyển.</span>
         </div>
-        <a href="/reports">← Báo cáo</a>
+        <nav style={{ display: 'flex', gap: 12 }}><a href="/receivables">Công nợ</a><a href="/reports">← Báo cáo</a></nav>
       </header>
 
       {error && <div className="recon-error">{error}</div>}
