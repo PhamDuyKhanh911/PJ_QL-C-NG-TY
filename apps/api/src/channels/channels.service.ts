@@ -5,6 +5,7 @@ import { ChannelCredentialCipherService } from './channel-credential-cipher.serv
 import { ChannelTokenService } from './channel-token.service';
 import { ChannelOAuthService } from './channel-oauth.service';
 import { UpdateChannelConnectionDto } from './dto/update-channel-connection.dto';
+import { ChannelInventoryPushService } from './channel-inventory-push.service';
 
 @Injectable()
 export class ChannelsService {
@@ -13,6 +14,7 @@ export class ChannelsService {
     private readonly credentialCipher: ChannelCredentialCipherService,
     private readonly tokens: ChannelTokenService,
     private readonly oauth: ChannelOAuthService,
+    private readonly inventoryPush: ChannelInventoryPushService,
   ) {}
 
   async list(organizationId: string) {
@@ -153,11 +155,10 @@ export class ChannelsService {
         throw new BadRequestException(`Chưa thể đồng bộ ${channel.name}: token seller đang ở trạng thái ${tokenState}`);
       }
     }
-    const snapshot = channel.skuMappings.map((mapping) => ({ sku: mapping.variant.sku, externalSkuId: mapping.externalSkuId, available: mapping.variant.product.active ? mapping.variant.balances.reduce((sum, balance) => sum + Math.max(0, balance.onHand - balance.reserved - balance.quarantined - balance.safetyStock), 0) : 0, warehouses: mapping.variant.balances.map((balance) => ({ warehouse: balance.warehouse.code, onHand: balance.onHand, reserved: balance.reserved, quarantined: balance.quarantined, safetyStock: balance.safetyStock })) }));
-    return this.prisma.$transaction(async (tx) => {
-      await tx.channelSyncRun.updateMany({ where: { channelAccountId: channel.id, status: ChannelSyncStatus.RUNNING }, data: { status: ChannelSyncStatus.SUCCEEDED, processedCount: snapshot.length, completedAt: new Date() } });
-      return tx.channelSyncRun.create({ data: { channelAccountId: channel.id, status: ChannelSyncStatus.SUCCEEDED, mappedSkuCount: snapshot.length, processedCount: snapshot.length, snapshot, triggeredById: userId, completedAt: new Date() } });
-    });
+    const snapshot = channel.skuMappings.map((mapping) => ({ sku: mapping.variant.sku, externalProductId: mapping.externalProductId, externalSkuId: mapping.externalSkuId, available: mapping.variant.product.active ? mapping.variant.balances.reduce((sum, balance) => sum + Math.max(0, balance.onHand - balance.reserved - balance.quarantined - balance.safetyStock), 0) : 0, warehouses: mapping.variant.balances.map((balance) => ({ warehouse: balance.warehouse.code, onHand: balance.onHand, reserved: balance.reserved, quarantined: balance.quarantined, safetyStock: balance.safetyStock })) }));
+    const run = await this.prisma.channelSyncRun.create({ data: { channelAccountId: channel.id, status: ChannelSyncStatus.RUNNING, direction: 'PUSH_INVENTORY', mappedSkuCount: snapshot.length, snapshot, triggeredById: userId } });
+    if (channel.type === ChannelType.SHOPEE || channel.type === ChannelType.TIKTOK_SHOP) return this.inventoryPush.processRun(run.id);
+    return this.prisma.channelSyncRun.update({ where: { id: run.id }, data: { status: ChannelSyncStatus.SUCCEEDED, processedCount: snapshot.length, completedAt: new Date() } });
   }
 
   async syncSummary(organizationId: string) {
@@ -172,9 +173,8 @@ export class ChannelsService {
   }
 
   async processPending(organizationId: string, userId: string) {
-    const pendingChannels = await this.prisma.salesChannelAccount.findMany({ where: { organizationId, active: true, syncRuns: { some: { status: ChannelSyncStatus.RUNNING } } }, select: { id: true } });
-    const runs = []; for (const channel of pendingChannels) runs.push(await this.syncInventory(organizationId, channel.id, userId));
-    return { processedChannels: runs.length, runs };
+    void userId;
+    return this.inventoryPush.processPending(organizationId, 50);
   }
 
   private missingFields(type: ChannelType, connection: ChannelConnection | null) {

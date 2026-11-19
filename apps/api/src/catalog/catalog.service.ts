@@ -127,7 +127,7 @@ export class CatalogService {
             status: ChannelSyncStatus.RUNNING,
             direction: 'AUTO_SKU_MAPPING_REMOVED',
             mappedSkuCount: 1,
-            snapshot: [{ sku: variant.sku, externalSkuId: mapping.externalSkuId, available: 0, trigger: 'SKU_MAPPING_REMOVED' }],
+            snapshot: [{ sku: variant.sku, externalProductId: mapping.externalProductId, externalSkuId: mapping.externalSkuId, available: 0, trigger: 'SKU_MAPPING_REMOVED' }],
             triggeredById: userId,
           },
         });

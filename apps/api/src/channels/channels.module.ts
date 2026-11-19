@@ -11,10 +11,11 @@ import { ChannelCredentialCipherService } from './channel-credential-cipher.serv
 import { ChannelTokenService } from './channel-token.service';
 import { ChannelOAuthService } from './channel-oauth.service';
 import { ChannelOrderSyncService } from './channel-order-sync.service';
+import { ChannelInventoryPushService } from './channel-inventory-push.service';
 
 @Module({
   imports: [AuthModule, SalesModule, ConversationsModule],
   controllers: [ChannelsController, ChannelOAuthController, ChannelWebhooksController, ChannelIntegrationEventsController],
-  providers: [ChannelsService, ChannelCredentialCipherService, ChannelTokenService, ChannelOAuthService, ChannelOrderSyncService, ChannelWebhookService],
+  providers: [ChannelsService, ChannelCredentialCipherService, ChannelTokenService, ChannelOAuthService, ChannelOrderSyncService, ChannelInventoryPushService, ChannelWebhookService],
 })
 export class ChannelsModule {}

@@ -342,11 +342,15 @@ model ChannelSyncRun {
   failedCount      Int @default(0)
   snapshot         Json?
   errorMessage     String?
+  attempts         Int @default(0)
+  nextAttemptAt    DateTime @default(now())
+  leaseUntil       DateTime?
   triggeredById    String?
   startedAt        DateTime @default(now())
   completedAt      DateTime?
   channelAccount   SalesChannelAccount @relation(fields: [channelAccountId], references: [id])
   @@index([channelAccountId, startedAt])
+  @@index([status, nextAttemptAt, leaseUntil])
 }
 
 model ChannelWebhookEvent {
