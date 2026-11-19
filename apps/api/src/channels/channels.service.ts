@@ -16,7 +16,7 @@ export class ChannelsService {
   ) {}
 
   async list(organizationId: string) {
-    const channels = await this.prisma.salesChannelAccount.findMany({
+    const [channels, warehouses] = await Promise.all([this.prisma.salesChannelAccount.findMany({
       where: { organizationId },
       include: {
         connection: true,
@@ -25,7 +25,7 @@ export class ChannelsService {
         _count: { select: { orders: true, conversations: true } },
       },
       orderBy: [{ type: 'asc' }, { name: 'asc' }],
-    });
+    }), this.prisma.warehouse.findMany({ where: { branch: { organizationId } }, select: { id: true, code: true, name: true, branch: { select: { name: true } } }, orderBy: { name: 'asc' } })]);
     return channels.map((channel) => ({
       id: channel.id,
       code: channel.code,
@@ -38,6 +38,7 @@ export class ChannelsService {
       orderCount: channel._count.orders,
       conversationCount: channel._count.conversations,
       recentSyncs: channel.syncRuns,
+      warehouseOptions: warehouses,
       connection: this.connectionView(channel, channel.connection),
     }));
   }
@@ -54,6 +55,10 @@ export class ChannelsService {
     if (channel.type === ChannelType.OFFLINE_STORE) throw new BadRequestException('Kênh POS nội bộ không cần cấu hình API');
     const officialMarketplace = channel.type === ChannelType.TIKTOK_SHOP || channel.type === ChannelType.SHOPEE;
     const facebook = channel.type === ChannelType.FACEBOOK_MESSENGER;
+    if (input.defaultWarehouseId) {
+      const warehouse = await this.prisma.warehouse.findFirst({ where: { id: input.defaultWarehouseId, branch: { organizationId } } });
+      if (!warehouse) throw new BadRequestException('Kho nhận đơn mặc định không thuộc doanh nghiệp');
+    }
     const saved = await this.prisma.channelConnection.upsert({
       where: { channelAccountId: channel.id },
       create: {
@@ -73,6 +78,7 @@ export class ChannelsService {
         orderSyncEnabled: input.orderSyncEnabled ?? officialMarketplace,
         inventorySyncEnabled: input.inventorySyncEnabled ?? officialMarketplace,
         chatSyncEnabled: input.chatSyncEnabled ?? facebook,
+        defaultWarehouseId: input.defaultWarehouseId?.trim() || null,
         updatedById: userId,
       },
       update: {
@@ -92,6 +98,7 @@ export class ChannelsService {
         ...(input.orderSyncEnabled !== undefined ? { orderSyncEnabled: input.orderSyncEnabled } : {}),
         ...(input.inventorySyncEnabled !== undefined ? { inventorySyncEnabled: input.inventorySyncEnabled } : {}),
         ...(input.chatSyncEnabled !== undefined ? { chatSyncEnabled: input.chatSyncEnabled } : {}),
+        ...(input.defaultWarehouseId !== undefined ? { defaultWarehouseId: input.defaultWarehouseId.trim() || null } : {}),
         updatedById: userId,
       },
     });
@@ -180,6 +187,7 @@ export class ChannelsService {
     if (!connection?.accessTokenEncrypted) missing.push(type === ChannelType.FACEBOOK_MESSENGER ? 'Page Access Token' : 'Access Token');
     if ((type === ChannelType.SHOPEE || type === ChannelType.TIKTOK_SHOP) && !connection?.refreshTokenEncrypted) missing.push('Refresh Token');
     if ((type === ChannelType.SHOPEE || type === ChannelType.TIKTOK_SHOP) && !connection?.accessTokenExpiresAt) missing.push('Thời hạn Access Token');
+    if ((type === ChannelType.SHOPEE || type === ChannelType.TIKTOK_SHOP) && !connection?.defaultWarehouseId) missing.push('Kho nhận đơn mặc định');
     if (type === ChannelType.FACEBOOK_MESSENGER && !connection?.webhookSecretEncrypted) missing.push('Webhook Secret');
     return missing;
   }
@@ -211,6 +219,11 @@ export class ChannelsService {
       orderSyncEnabled: connection?.orderSyncEnabled ?? false,
       inventorySyncEnabled: connection?.inventorySyncEnabled ?? false,
       chatSyncEnabled: connection?.chatSyncEnabled ?? false,
+      defaultWarehouseId: connection?.defaultWarehouseId ?? '',
+      orderSyncCursorAt: connection?.orderSyncCursorAt ?? null,
+      lastOrderSyncAt: connection?.lastOrderSyncAt ?? null,
+      orderSyncStatus: connection?.orderSyncStatus ?? 'IDLE',
+      orderSyncError: connection?.orderSyncError ?? null,
       lastCheckedAt: connection?.lastCheckedAt ?? null,
       lastError: connection?.lastError ?? null,
       webhookUrl: applicable ? `${apiPublicUrl}/api/channels/webhooks/${channel.id}` : null,

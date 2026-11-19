@@ -16,4 +16,5 @@ export class UpdateChannelConnectionDto {
   @IsOptional() @IsBoolean() orderSyncEnabled?: boolean;
   @IsOptional() @IsBoolean() inventorySyncEnabled?: boolean;
   @IsOptional() @IsBoolean() chatSyncEnabled?: boolean;
+  @IsOptional() @IsString() @MaxLength(100) defaultWarehouseId?: string;
 }

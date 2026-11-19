@@ -10,10 +10,11 @@ import { ChannelsService } from './channels.service';
 import { ChannelCredentialCipherService } from './channel-credential-cipher.service';
 import { ChannelTokenService } from './channel-token.service';
 import { ChannelOAuthService } from './channel-oauth.service';
+import { ChannelOrderSyncService } from './channel-order-sync.service';
 
 @Module({
   imports: [AuthModule, SalesModule, ConversationsModule],
   controllers: [ChannelsController, ChannelOAuthController, ChannelWebhooksController, ChannelIntegrationEventsController],
-  providers: [ChannelsService, ChannelCredentialCipherService, ChannelTokenService, ChannelOAuthService, ChannelWebhookService],
+  providers: [ChannelsService, ChannelCredentialCipherService, ChannelTokenService, ChannelOAuthService, ChannelOrderSyncService, ChannelWebhookService],
 })
 export class ChannelsModule {}

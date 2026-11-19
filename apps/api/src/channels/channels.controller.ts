@@ -8,11 +8,12 @@ import { PermissionsGuard } from '../auth/permissions.guard';
 import { ChannelsService } from './channels.service';
 import { UpdateChannelConnectionDto } from './dto/update-channel-connection.dto';
 import { ChannelOAuthService } from './channel-oauth.service';
+import { ChannelOrderSyncService } from './channel-order-sync.service';
 
 @Controller('channels')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class ChannelsController {
-  constructor(private readonly channels: ChannelsService) {}
+  constructor(private readonly channels: ChannelsService, private readonly orderSync: ChannelOrderSyncService) {}
 
   @Get() @RequirePermissions('channels.read')
   list(@CurrentUser() user: AuthenticatedUser) { return this.channels.list(user.organizationId); }
@@ -48,6 +49,9 @@ export class ChannelsController {
 
   @Post(':id/sync-inventory') @RequirePermissions('channels.sync')
   sync(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) { return this.channels.syncInventory(user.organizationId, id, user.id); }
+
+  @Post(':id/sync-orders') @RequirePermissions('channels.sync')
+  syncOrders(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) { return this.orderSync.sync(user.organizationId, id, user.id); }
 }
 
 @Controller('channels/oauth')

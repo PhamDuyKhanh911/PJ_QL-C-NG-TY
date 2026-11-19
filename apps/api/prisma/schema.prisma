@@ -178,6 +178,7 @@ model Warehouse {
   transactions InventoryTransaction[]
   orders   SalesOrder[]
   purchaseOrders PurchaseOrder[]
+  channelConnections ChannelConnection[]
   @@unique([branchId, code])
 }
 
@@ -296,14 +297,22 @@ model ChannelConnection {
   orderSyncEnabled        Boolean @default(true)
   inventorySyncEnabled    Boolean @default(true)
   chatSyncEnabled         Boolean @default(false)
+  defaultWarehouseId      String?
+  orderSyncCursorAt       DateTime?
+  lastOrderSyncAt         DateTime?
+  orderSyncStatus         String @default("IDLE")
+  orderSyncLeaseUntil     DateTime?
+  orderSyncError          String?
   lastCheckedAt           DateTime?
   lastError               String?
   updatedById             String?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
   channelAccount          SalesChannelAccount @relation(fields: [channelAccountId], references: [id])
+  defaultWarehouse        Warehouse? @relation(fields: [defaultWarehouseId], references: [id])
   @@index([status, updatedAt])
   @@index([tokenRefreshStatus, accessTokenExpiresAt])
+  @@index([orderSyncStatus, orderSyncLeaseUntil])
 }
 
 model ChannelOAuthSession {

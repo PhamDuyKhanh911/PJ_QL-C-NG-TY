@@ -28,12 +28,18 @@ type Connection = {
   orderSyncEnabled: boolean;
   inventorySyncEnabled: boolean;
   chatSyncEnabled: boolean;
+  defaultWarehouseId: string;
+  orderSyncCursorAt?: string;
+  lastOrderSyncAt?: string;
+  orderSyncStatus: string;
+  orderSyncError?: string;
   lastCheckedAt?: string;
   lastError?: string;
   webhookUrl?: string;
   oauthCallbackUrl?: string;
 };
-type Channel = { id: string; code: string; name: string; type: string; active: boolean; mappedSkuCount: number; availableUnits: number; orderCount: number; conversationCount: number; recentSyncs: SyncRun[]; connection: Connection };
+type WarehouseOption = { id: string; code: string; name: string; branch: { name: string } };
+type Channel = { id: string; code: string; name: string; type: string; active: boolean; mappedSkuCount: number; availableUnits: number; orderCount: number; conversationCount: number; recentSyncs: SyncRun[]; warehouseOptions: WarehouseOption[]; connection: Connection };
 type CurrentUser = { permissions: string[] };
 
 const api = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api';
@@ -85,6 +91,18 @@ export default function ChannelsPage() {
     finally { setSyncing(''); }
   }
 
+  async function syncOrders(channel: Channel) {
+    setSyncing(`orders:${channel.id}`); setError(''); setNotice('');
+    try {
+      const response = await fetch(`${api}/channels/${channel.id}/sync-orders`, { method: 'POST', headers: { Authorization: `Bearer ${localStorage.getItem('erp_access_token')}` } });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(Array.isArray(payload.message) ? payload.message[0] : payload.message ?? 'Không thể kéo đơn từ sàn');
+      setNotice(`Đã đọc ${payload.fetched} đơn của ${channel.name}; nhập ${payload.imported}, trùng ${payload.duplicates}, lỗi ${payload.failures.length}.`);
+      await load();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Lỗi đồng bộ đơn'); }
+    finally { setSyncing(''); }
+  }
+
   async function saveConnection(event: FormEvent<HTMLFormElement>, channel: Channel) {
     event.preventDefault(); setSaving(true); setError(''); setNotice('');
     const form = new FormData(event.currentTarget);
@@ -97,6 +115,7 @@ export default function ChannelsPage() {
       orderSyncEnabled: form.get('orderSyncEnabled') === 'on',
       inventorySyncEnabled: form.get('inventorySyncEnabled') === 'on',
       chatSyncEnabled: form.get('chatSyncEnabled') === 'on',
+      defaultWarehouseId: form.get('defaultWarehouseId'),
     };
     for (const secret of ['clientSecret', 'accessToken', 'refreshToken', 'webhookSecret']) {
       const value = String(form.get(secret) ?? '').trim();
@@ -173,7 +192,7 @@ export default function ChannelsPage() {
       <div className="channel-data"><div><span>SKU đã ánh xạ</span><b>{channel.mappedSkuCount}</b></div><div><span>Tồn khả dụng</span><b>{channel.availableUnits}</b></div><div><span>Đơn hàng</span><b>{channel.orderCount}</b></div><div><span>Hội thoại</span><b>{channel.conversationCount}</b></div></div>
       <div className="capabilities"><span className={channel.connection.orderSyncEnabled ? 'on' : ''}>Đơn hàng</span><span className={channel.connection.inventorySyncEnabled ? 'on' : ''}>Tồn kho</span><span className={channel.connection.chatSyncEnabled ? 'on' : ''}>Tin nhắn</span></div>
       <div className="sync-history"><h3>Lần đồng bộ gần nhất</h3>{channel.recentSyncs[0] ? <div><span className={`sync-status ${channel.recentSyncs[0].status.toLowerCase()}`}>{channel.recentSyncs[0].status === 'SUCCEEDED' ? 'Thành công' : channel.recentSyncs[0].status}</span><b>{channel.recentSyncs[0].processedCount}/{channel.recentSyncs[0].mappedSkuCount} SKU</b><time>{new Date(channel.recentSyncs[0].startedAt).toLocaleString('vi-VN')}</time></div> : <p>Chưa có lịch sử đồng bộ</p>}</div>
-      <div className="channel-buttons">{canManage && channel.connection.applicable && <button className="configure" onClick={() => setConfiguring(channel)}>Cấu hình kết nối</button>}{canSync && <button disabled={syncing === channel.id || !channel.active || (marketplace(channel.type) && channel.connection.tokenState !== 'VALID')} onClick={() => sync(channel)}>{syncing === channel.id ? 'Đang tạo snapshot...' : 'Đồng bộ tồn kho'}</button>}</div>
+      <div className="channel-buttons">{canManage && channel.connection.applicable && <button className="configure" onClick={() => setConfiguring(channel)}>Cấu hình kết nối</button>}{canSync && marketplace(channel.type) && <button disabled={syncing === `orders:${channel.id}` || !channel.active || channel.connection.tokenState !== 'VALID' || !channel.connection.defaultWarehouseId} onClick={() => syncOrders(channel)}>{syncing === `orders:${channel.id}` ? 'Đang kéo đơn...' : 'Kéo đơn từ sàn'}</button>}{canSync && <button disabled={syncing === channel.id || !channel.active || (marketplace(channel.type) && channel.connection.tokenState !== 'VALID')} onClick={() => sync(channel)}>{syncing === channel.id ? 'Đang tạo snapshot...' : 'Đồng bộ tồn kho'}</button>}</div>
     </article>)}</section>
     {configuring && <div className="connection-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) setConfiguring(null); }}>
       <form className="connection-modal" onSubmit={(event) => saveConnection(event, configuring)}>
@@ -190,6 +209,7 @@ export default function ChannelsPage() {
           <label>Refresh Token {marketplace(configuring.type) ? '' : '(tùy chọn)'}<input name="refreshToken" type="password" placeholder={configuring.connection.hasRefreshToken ? 'Đã lưu ••••••••' : 'Nhập refresh token'} /></label>
           <label>Webhook Secret {configuring.type !== 'FACEBOOK_MESSENGER' && '(tùy chọn)'}<input name="webhookSecret" type="password" placeholder={configuring.connection.hasWebhookSecret ? 'Đã lưu ••••••••' : 'Nhập webhook secret'} /></label>
           {marketplace(configuring.type) && <>
+            <label>Kho nhận đơn mặc định<select name="defaultWarehouseId" defaultValue={configuring.connection.defaultWarehouseId} required><option value="">Chọn kho</option>{configuring.warehouseOptions.map((warehouse) => <option value={warehouse.id} key={warehouse.id}>{warehouse.name} · {warehouse.branch.name}</option>)}</select></label>
             <label>Access Token hết hạn lúc<input name="accessTokenExpiresAt" type="datetime-local" defaultValue={datetimeLocal(configuring.connection.accessTokenExpiresAt)} /></label>
             <label>Refresh Token hết hạn lúc (nếu biết)<input name="refreshTokenExpiresAt" type="datetime-local" defaultValue={datetimeLocal(configuring.connection.refreshTokenExpiresAt)} /></label>
             <label className="scope-field">Quyền đã cấp, cách nhau bằng dấu phẩy<input name="grantedScopes" defaultValue={configuring.connection.grantedScopes.join(', ')} placeholder="order, product, inventory" /></label>
