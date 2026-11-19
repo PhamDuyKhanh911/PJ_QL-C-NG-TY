@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { PrismaService } from '../prisma/prisma.service';
+import { MessageDeliveryService } from './message-delivery.service';
 import { AssignConversationDto } from './dto/assign-conversation.dto';
 import { ListConversationsDto } from './dto/list-conversations.dto';
 import { SendMessageDto } from './dto/send-message.dto';
@@ -18,7 +19,10 @@ export type InboundChannelMessage = {
 
 @Injectable()
 export class ConversationsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly delivery: MessageDeliveryService,
+  ) {}
 
   async list(user: AuthenticatedUser, query: ListConversationsDto) {
     const channelIds = await this.allowedChannelIds(user);
@@ -57,13 +61,23 @@ export class ConversationsService {
 
   async reply(user: AuthenticatedUser, conversationId: string, input: SendMessageDto) {
     await this.assertAccessible(user, conversationId);
-    return this.prisma.$transaction(async (tx) => {
+    const message = await this.prisma.$transaction(async (tx) => {
       const message = await tx.message.create({
-        data: { conversationId, direction: 'OUTBOUND', type: 'TEXT', content: input.content.trim(), senderRole: 'CUSTOMER_SERVICE', sentAt: new Date() },
+        data: {
+          conversationId,
+          direction: 'OUTBOUND',
+          type: 'TEXT',
+          content: input.content.trim(),
+          senderRole: 'CUSTOMER_SERVICE',
+          sentAt: new Date(),
+          deliveryStatus: 'QUEUED',
+          nextDeliveryAttemptAt: new Date(),
+        },
       });
       await tx.conversation.update({ where: { id: conversationId }, data: { status: 'REPLIED', assignedUserId: user.id, lastMessageAt: message.sentAt } });
-      return { ...message, deliveryStatus: 'QUEUED' };
+      return message;
     });
+    return this.delivery.processMessage(message.id);
   }
 
   async ingestInbound(organizationId: string, channelAccountId: string, input: InboundChannelMessage) {
@@ -117,6 +131,8 @@ export class ConversationsService {
           content: input.content.trim(),
           senderRole: 'CUSTOMER',
           sentAt,
+          deliveryStatus: 'RECEIVED',
+          deliveredAt: sentAt,
         },
       });
       return { conversation, message, duplicated: false };
@@ -137,6 +153,14 @@ export class ConversationsService {
     if (!order) throw new NotFoundException('Không tìm thấy đơn hàng hợp lệ để ghi nhận doanh thu');
     if (order.channelAccountId !== conversation.channelAccountId) throw new BadRequestException('Đơn hàng phải thuộc cùng seller với hội thoại');
     return this.prisma.conversation.update({ where: { id: conversationId }, data: { status: 'CLOSED_WON', closedOrderId: order.id, closedByUserId: user.id, closedAt: new Date(), assignedUserId: user.id } });
+  }
+
+  processOutbox(organizationId: string) {
+    return this.delivery.processPending(organizationId, 50);
+  }
+
+  retryMessage(organizationId: string, messageId: string) {
+    return this.delivery.retry(organizationId, messageId);
   }
 
   private async assertAccessible(user: AuthenticatedUser, conversationId: string) {
