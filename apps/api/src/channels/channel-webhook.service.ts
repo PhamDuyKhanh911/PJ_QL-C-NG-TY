@@ -23,6 +23,11 @@ type SignatureHeaders = {
   channel?: string;
   providerEventId?: string;
 };
+type NormalizedWebhookEvent = {
+  providerEventId: string;
+  eventType: string;
+  payload: JsonObject;
+};
 
 @Injectable()
 export class ChannelWebhookService implements OnModuleInit, OnModuleDestroy {
@@ -67,28 +72,19 @@ export class ChannelWebhookService implements OnModuleInit, OnModuleDestroy {
     if (!channel.connection) throw new ServiceUnavailableException('Seller chưa có cấu hình kết nối');
     this.verifySignature(channel.type, channel.connection, rawBody, headers);
 
-    const eventType = this.eventType(body);
-    const providerEventId = headers.providerEventId?.trim() || this.stringValue(body.eventId) || this.stringValue(body.id) || createHash('sha256').update(rawBody).digest('hex');
-    try {
-      const event = await this.prisma.channelWebhookEvent.create({
-        data: {
-          channelAccountId: channel.id,
-          providerEventId,
-          eventType,
-          payload: body as Prisma.InputJsonObject,
-          signatureVerified: true,
-        },
-      });
-      return { accepted: true, duplicated: false, eventId: event.id, status: event.status };
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        const event = await this.prisma.channelWebhookEvent.findUniqueOrThrow({
-          where: { channelAccountId_providerEventId: { channelAccountId: channel.id, providerEventId } },
-        });
-        return { accepted: true, duplicated: true, eventId: event.id, status: event.status };
-      }
-      throw error;
-    }
+    const events = channel.type === ChannelType.FACEBOOK_MESSENGER
+      ? this.facebookEvents(body, rawBody, channel.connection.accountIdentifier)
+      : [this.genericEvent(body, rawBody, headers.providerEventId)];
+    const saved = [];
+    for (const input of events) saved.push(await this.saveEvent(channel.id, input));
+    return {
+      accepted: true,
+      received: saved.length,
+      created: saved.filter((event) => !event.duplicated).length,
+      duplicated: saved.filter((event) => event.duplicated).length,
+      events: saved,
+      ...(saved.length === 1 ? { eventId: saved[0].eventId, status: saved[0].status } : {}),
+    };
   }
 
   async list(organizationId: string, query: ListChannelWebhookEventsDto) {
@@ -323,6 +319,118 @@ export class ChannelWebhookService implements OnModuleInit, OnModuleDestroy {
       occurredAt: this.optionalString(data.occurredAt),
       items: items.length ? items : undefined,
     };
+  }
+
+  private async saveEvent(channelAccountId: string, input: NormalizedWebhookEvent) {
+    try {
+      const event = await this.prisma.channelWebhookEvent.create({
+        data: {
+          channelAccountId,
+          providerEventId: input.providerEventId,
+          eventType: input.eventType,
+          payload: input.payload as Prisma.InputJsonObject,
+          signatureVerified: true,
+        },
+      });
+      return { duplicated: false, eventId: event.id, status: event.status, eventType: event.eventType };
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const event = await this.prisma.channelWebhookEvent.findUniqueOrThrow({
+          where: { channelAccountId_providerEventId: { channelAccountId, providerEventId: input.providerEventId } },
+        });
+        return { duplicated: true, eventId: event.id, status: event.status, eventType: event.eventType };
+      }
+      throw error;
+    }
+  }
+
+  private genericEvent(body: JsonObject, rawBody: Buffer, headerEventId?: string): NormalizedWebhookEvent {
+    return {
+      eventType: this.eventType(body),
+      providerEventId: headerEventId?.trim() || this.stringValue(body.eventId) || this.stringValue(body.id) || createHash('sha256').update(rawBody).digest('hex'),
+      payload: body,
+    };
+  }
+
+  private facebookEvents(body: JsonObject, rawBody: Buffer, configuredPageId?: string | null): NormalizedWebhookEvent[] {
+    if (body.object !== 'page' || !Array.isArray(body.entry)) throw new BadRequestException('Payload Facebook phải có object=page và danh sách entry');
+    const bodyHash = createHash('sha256').update(rawBody).digest('hex');
+    const result: NormalizedWebhookEvent[] = [];
+    body.entry.forEach((rawEntry, entryIndex) => {
+      if (!this.isObject(rawEntry)) throw new BadRequestException('Facebook entry không hợp lệ');
+      const pageId = this.stringValue(rawEntry.id);
+      if (configuredPageId && pageId !== configuredPageId) throw new ForbiddenException('Page ID trong webhook không khớp seller được cấu hình');
+      if (!Array.isArray(rawEntry.messaging)) return;
+      rawEntry.messaging.forEach((rawMessaging, messagingIndex) => {
+        if (!this.isObject(rawMessaging)) return;
+        result.push(this.facebookMessagingEvent(rawMessaging, pageId, bodyHash, entryIndex, messagingIndex));
+      });
+    });
+    if (!result.length) throw new BadRequestException('Webhook Facebook không chứa sự kiện messaging');
+    return result;
+  }
+
+  private facebookMessagingEvent(messaging: JsonObject, pageId: string, bodyHash: string, entryIndex: number, messagingIndex: number): NormalizedWebhookEvent {
+    const sender = this.isObject(messaging.sender) ? messaging.sender : {};
+    const recipient = this.isObject(messaging.recipient) ? messaging.recipient : {};
+    const message = this.isObject(messaging.message) ? messaging.message : undefined;
+    const postback = this.isObject(messaging.postback) ? messaging.postback : undefined;
+    const senderId = this.stringValue(sender.id);
+    const recipientId = this.stringValue(recipient.id);
+    const timestamp = Number(messaging.timestamp);
+    const sentAt = Number.isFinite(timestamp) && timestamp > 0 ? new Date(timestamp).toISOString() : new Date().toISOString();
+    const fallbackId = `facebook:${bodyHash}:${entryIndex}:${messagingIndex}`;
+
+    if (message) {
+      const messageId = this.stringValue(message.mid) || fallbackId;
+      if (message.is_echo === true || senderId === pageId) {
+        return { providerEventId: messageId, eventType: 'FACEBOOK_MESSAGE_ECHO', payload: { data: { pageId, senderId, recipientId, sentAt } } };
+      }
+      const content = this.facebookMessageContent(message);
+      return {
+        providerEventId: messageId,
+        eventType: 'MESSAGE_RECEIVED',
+        payload: {
+          data: {
+            externalConversationId: senderId,
+            externalMessageId: messageId,
+            externalBuyerId: senderId,
+            content,
+            sentAt,
+            pageId,
+            recipientId,
+          },
+        },
+      };
+    }
+    if (postback) {
+      const postbackId = this.stringValue(postback.mid) || fallbackId;
+      const content = this.stringValue(postback.title) || this.stringValue(postback.payload) || '[Khách đã chọn một nút tương tác]';
+      return {
+        providerEventId: postbackId,
+        eventType: 'MESSAGE_RECEIVED',
+        payload: { data: { externalConversationId: senderId, externalMessageId: postbackId, externalBuyerId: senderId, content, sentAt, pageId, recipientId } },
+      };
+    }
+    if (this.isObject(messaging.delivery)) {
+      const mids = Array.isArray(messaging.delivery.mids) ? messaging.delivery.mids.filter((value): value is string => typeof value === 'string') : [];
+      return { providerEventId: mids[0] ? `delivery:${mids[0]}` : fallbackId, eventType: 'FACEBOOK_MESSAGE_DELIVERED', payload: { data: { pageId, senderId, recipientId, sentAt, messageIds: mids } } };
+    }
+    if (this.isObject(messaging.read)) {
+      return { providerEventId: `read:${senderId}:${String(messaging.read.watermark ?? (timestamp || bodyHash))}`, eventType: 'FACEBOOK_MESSAGE_READ', payload: { data: { pageId, senderId, recipientId, sentAt, watermark: messaging.read.watermark } } };
+    }
+    return { providerEventId: fallbackId, eventType: 'FACEBOOK_MESSAGING_UNKNOWN', payload: { data: { pageId, senderId, recipientId, sentAt } } };
+  }
+
+  private facebookMessageContent(message: JsonObject) {
+    const text = this.stringValue(message.text);
+    if (text) return text;
+    const attachments = Array.isArray(message.attachments) ? message.attachments.filter(this.isObject) : [];
+    if (attachments.length) {
+      const types = attachments.map((attachment) => this.stringValue(attachment.type) || 'file');
+      return `[Khách gửi tệp đính kèm: ${types.join(', ')}]`;
+    }
+    return '[Tin nhắn Facebook không có nội dung văn bản]';
   }
 
   private verifySignature(
