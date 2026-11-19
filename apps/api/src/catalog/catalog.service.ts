@@ -4,6 +4,7 @@ import { queueInventorySync } from '../channels/queue-inventory-sync';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProductDto, CreateVariantDto } from './dto/create-product.dto';
 import { ReplaceMappingsDto } from './dto/replace-mappings.dto';
+import { ResolveChannelMappingDto } from './dto/resolve-channel-mapping.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { UpdateVariantDto } from './dto/update-variant.dto';
 
@@ -37,6 +38,73 @@ export class CatalogService {
       select: { id: true, code: true, name: true, type: true },
       orderBy: [{ type: 'asc' }, { name: 'asc' }],
     });
+  }
+
+  unmappedChannelSkus(organizationId: string) {
+    return this.prisma.channelInventoryReconciliation.findMany({
+      where: { status: 'UNMAPPED', channelAccount: { organizationId, active: true } },
+      select: {
+        id: true,
+        externalProductId: true,
+        externalSkuId: true,
+        reportedAvailable: true,
+        observedAt: true,
+        source: true,
+        channelAccount: { select: { id: true, code: true, name: true, type: true } },
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: 200,
+    });
+  }
+
+  async resolveChannelMapping(organizationId: string, userId: string, input: ResolveChannelMappingDto) {
+    const [reconciliation, variant] = await Promise.all([
+      this.prisma.channelInventoryReconciliation.findFirst({
+        where: { id: input.reconciliationId, status: 'UNMAPPED', channelAccount: { organizationId, active: true } },
+        include: { channelAccount: true },
+      }),
+      this.prisma.productVariant.findFirst({
+        where: { id: input.variantId, product: { organizationId, active: true } },
+        include: { product: true, balances: true },
+      }),
+    ]);
+    if (!reconciliation) throw new NotFoundException('Không tìm thấy SKU sàn chưa được ghép');
+    if (!variant) throw new NotFoundException('Không tìm thấy SKU nội bộ đang kinh doanh');
+    const externalProductId = input.externalProductId?.trim() || reconciliation.externalProductId?.trim();
+    if (!externalProductId) throw new BadRequestException('Cần nhập mã sản phẩm trên sàn để có thể đồng bộ tồn kho');
+    const occupied = await this.prisma.channelSkuMapping.findFirst({
+      where: { channelAccountId: reconciliation.channelAccountId, variantId: variant.id },
+      include: { channelAccount: { select: { name: true } } },
+    });
+    if (occupied) throw new ConflictException(`SKU nội bộ ${variant.sku} đã được ghép với một SKU khác tại ${occupied.channelAccount.name}`);
+    const expectedAvailable = variant.balances.reduce(
+      (sum, balance) => sum + Math.max(0, balance.onHand - balance.reserved - balance.quarantined - balance.safetyStock),
+      0,
+    );
+    const difference = reconciliation.reportedAvailable - expectedAvailable;
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const mapping = await tx.channelSkuMapping.create({
+          data: {
+            channelAccountId: reconciliation.channelAccountId,
+            variantId: variant.id,
+            externalProductId,
+            externalSkuId: reconciliation.externalSkuId,
+            externalSku: variant.sku,
+          },
+          include: { channelAccount: { select: { id: true, code: true, name: true, type: true } } },
+        });
+        await tx.channelInventoryReconciliation.update({
+          where: { id: reconciliation.id },
+          data: { expectedAvailable, difference, status: difference === 0 ? 'MATCHED' : 'MISMATCH', externalProductId },
+        });
+        await queueInventorySync(tx, [variant.id], userId, 'UNMAPPED_CHANNEL_SKU_RESOLVED');
+        return { mapping, expectedAvailable, difference, status: difference === 0 ? 'MATCHED' : 'MISMATCH' };
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new ConflictException('SKU sàn này đã được ghép trước đó');
+      throw error;
+    }
   }
 
   async create(organizationId: string, input: CreateProductDto) {

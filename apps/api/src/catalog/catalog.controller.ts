@@ -8,6 +8,7 @@ import { CatalogService } from './catalog.service';
 import { CreateProductDto, CreateVariantDto } from './dto/create-product.dto';
 import { ListProductsDto } from './dto/list-products.dto';
 import { ReplaceMappingsDto } from './dto/replace-mappings.dto';
+import { ResolveChannelMappingDto } from './dto/resolve-channel-mapping.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { UpdateVariantDto } from './dto/update-variant.dto';
 
@@ -23,6 +24,14 @@ export class CatalogController {
 
   @Get('channels') @RequirePermissions('catalog.read')
   channels(@CurrentUser() user: AuthenticatedUser) { return this.catalog.channels(user.organizationId); }
+
+  @Get('unmapped-channel-skus') @RequirePermissions('catalog.read')
+  unmappedChannelSkus(@CurrentUser() user: AuthenticatedUser) { return this.catalog.unmappedChannelSkus(user.organizationId); }
+
+  @Post('channel-mappings/resolve') @RequirePermissions('catalog.manage')
+  resolveChannelMapping(@CurrentUser() user: AuthenticatedUser, @Body() input: ResolveChannelMappingDto) {
+    return this.catalog.resolveChannelMapping(user.organizationId, user.id, input);
+  }
 
   @Post('products') @RequirePermissions('catalog.create')
   create(@CurrentUser() user: AuthenticatedUser, @Body() input: CreateProductDto) {
