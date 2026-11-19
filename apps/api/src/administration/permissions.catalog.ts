@@ -18,6 +18,7 @@ export const PERMISSION_CATALOG = [
   { code: 'conversations.close_sale', group: 'CSKH', name: 'Ghi nhận chốt đơn thành công' },
   { code: 'customers.read', group: 'CSKH', name: 'Xem hồ sơ khách hàng' },
   { code: 'channels.read', group: 'Kênh bán', name: 'Xem trạng thái kênh bán' },
+  { code: 'channels.manage', group: 'Kênh bán', name: 'Cấu hình thông tin kết nối seller và webhook' },
   { code: 'channels.sync', group: 'Kênh bán', name: 'Thực hiện đồng bộ tồn kho' },
   { code: 'after_sales.read', group: 'Hậu mãi', name: 'Xem yêu cầu hủy hoàn đổi trả' },
   { code: 'after_sales.manage', group: 'Hậu mãi', name: 'Tạo và xử lý yêu cầu hậu mãi' },

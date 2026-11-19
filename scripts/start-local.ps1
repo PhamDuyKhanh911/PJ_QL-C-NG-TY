@@ -22,7 +22,9 @@ New-Item -ItemType Directory -Path $LogRoot, $RunRoot -Force | Out-Null
 $env:Path = "$NodeRoot;$env:Path"
 $env:DATABASE_URL = 'postgresql://erp:change_me@localhost:5432/enterprise_management?schema=public'
 $env:JWT_SECRET = 'local-dev-secret-change-before-production-2026'
+$env:CHANNEL_CREDENTIAL_KEY = 'local-channel-credential-key-change-before-production-2026'
 $env:WEB_ORIGIN = 'http://localhost:3000'
+$env:API_PUBLIC_URL = 'http://localhost:4000'
 $env:NEXT_PUBLIC_API_URL = 'http://localhost:4000/api'
 
 & (Join-Path $PostgresRoot 'bin\pg_isready.exe') -h localhost -p 5432 *> $null

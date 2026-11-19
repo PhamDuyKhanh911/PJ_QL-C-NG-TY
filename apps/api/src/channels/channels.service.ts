@@ -1,14 +1,116 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { ChannelSyncStatus } from '@prisma/client';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { ChannelConnection, ChannelConnectionStatus, ChannelSyncStatus, ChannelType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { ChannelCredentialCipherService } from './channel-credential-cipher.service';
+import { UpdateChannelConnectionDto } from './dto/update-channel-connection.dto';
 
 @Injectable()
 export class ChannelsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly credentialCipher: ChannelCredentialCipherService,
+  ) {}
+
   async list(organizationId: string) {
-    const channels = await this.prisma.salesChannelAccount.findMany({ where: { organizationId }, include: { skuMappings: { include: { variant: { include: { balances: true, product: { select: { active: true } } } } } }, syncRuns: { orderBy: { startedAt: 'desc' }, take: 5 }, _count: { select: { orders: true, conversations: true } } }, orderBy: [{ type: 'asc' }, { name: 'asc' }] });
-    return channels.map((channel) => ({ id: channel.id, code: channel.code, name: channel.name, type: channel.type, active: channel.active, externalShopId: channel.externalShopId, mappedSkuCount: channel.skuMappings.length, availableUnits: channel.skuMappings.reduce((total, mapping) => total + (mapping.variant.product.active ? mapping.variant.balances.reduce((sum, balance) => sum + Math.max(0, balance.onHand - balance.reserved - balance.quarantined - balance.safetyStock), 0) : 0), 0), orderCount: channel._count.orders, conversationCount: channel._count.conversations, recentSyncs: channel.syncRuns }));
+    const channels = await this.prisma.salesChannelAccount.findMany({
+      where: { organizationId },
+      include: {
+        connection: true,
+        skuMappings: { include: { variant: { include: { balances: true, product: { select: { active: true } } } } } },
+        syncRuns: { orderBy: { startedAt: 'desc' }, take: 5 },
+        _count: { select: { orders: true, conversations: true } },
+      },
+      orderBy: [{ type: 'asc' }, { name: 'asc' }],
+    });
+    return channels.map((channel) => ({
+      id: channel.id,
+      code: channel.code,
+      name: channel.name,
+      type: channel.type,
+      active: channel.active,
+      externalShopId: channel.externalShopId,
+      mappedSkuCount: channel.skuMappings.length,
+      availableUnits: channel.skuMappings.reduce((total, mapping) => total + (mapping.variant.product.active ? mapping.variant.balances.reduce((sum, balance) => sum + Math.max(0, balance.onHand - balance.reserved - balance.quarantined - balance.safetyStock), 0) : 0), 0),
+      orderCount: channel._count.orders,
+      conversationCount: channel._count.conversations,
+      recentSyncs: channel.syncRuns,
+      connection: this.connectionView(channel, channel.connection),
+    }));
   }
+
+  async getConnection(organizationId: string, channelId: string) {
+    const channel = await this.prisma.salesChannelAccount.findFirst({ where: { id: channelId, organizationId }, include: { connection: true } });
+    if (!channel) throw new NotFoundException('Không tìm thấy kênh bán');
+    return this.connectionView(channel, channel.connection);
+  }
+
+  async saveConnection(organizationId: string, userId: string, channelId: string, input: UpdateChannelConnectionDto) {
+    const channel = await this.prisma.salesChannelAccount.findFirst({ where: { id: channelId, organizationId, active: true }, include: { connection: true } });
+    if (!channel) throw new NotFoundException('Không tìm thấy kênh bán đang hoạt động');
+    if (channel.type === ChannelType.OFFLINE_STORE) throw new BadRequestException('Kênh POS nội bộ không cần cấu hình API');
+    const officialMarketplace = channel.type === ChannelType.TIKTOK_SHOP || channel.type === ChannelType.SHOPEE;
+    const facebook = channel.type === ChannelType.FACEBOOK_MESSENGER;
+    const saved = await this.prisma.channelConnection.upsert({
+      where: { channelAccountId: channel.id },
+      create: {
+        channelAccountId: channel.id,
+        environment: input.environment ?? 'PRODUCTION',
+        clientId: input.clientId?.trim() || null,
+        accountIdentifier: input.accountIdentifier?.trim() || null,
+        apiBaseUrl: input.apiBaseUrl?.trim() || null,
+        clientSecretEncrypted: input.clientSecret ? this.credentialCipher.encrypt(input.clientSecret) : null,
+        accessTokenEncrypted: input.accessToken ? this.credentialCipher.encrypt(input.accessToken) : null,
+        refreshTokenEncrypted: input.refreshToken ? this.credentialCipher.encrypt(input.refreshToken) : null,
+        webhookSecretEncrypted: input.webhookSecret ? this.credentialCipher.encrypt(input.webhookSecret) : null,
+        orderSyncEnabled: input.orderSyncEnabled ?? officialMarketplace,
+        inventorySyncEnabled: input.inventorySyncEnabled ?? officialMarketplace,
+        chatSyncEnabled: input.chatSyncEnabled ?? facebook,
+        updatedById: userId,
+      },
+      update: {
+        ...(input.environment !== undefined ? { environment: input.environment } : {}),
+        ...(input.clientId !== undefined ? { clientId: input.clientId.trim() || null } : {}),
+        ...(input.accountIdentifier !== undefined ? { accountIdentifier: input.accountIdentifier.trim() || null } : {}),
+        ...(input.apiBaseUrl !== undefined ? { apiBaseUrl: input.apiBaseUrl.trim() || null } : {}),
+        ...(input.clientSecret ? { clientSecretEncrypted: this.credentialCipher.encrypt(input.clientSecret) } : {}),
+        ...(input.accessToken ? { accessTokenEncrypted: this.credentialCipher.encrypt(input.accessToken) } : {}),
+        ...(input.refreshToken ? { refreshTokenEncrypted: this.credentialCipher.encrypt(input.refreshToken) } : {}),
+        ...(input.webhookSecret ? { webhookSecretEncrypted: this.credentialCipher.encrypt(input.webhookSecret) } : {}),
+        ...(input.orderSyncEnabled !== undefined ? { orderSyncEnabled: input.orderSyncEnabled } : {}),
+        ...(input.inventorySyncEnabled !== undefined ? { inventorySyncEnabled: input.inventorySyncEnabled } : {}),
+        ...(input.chatSyncEnabled !== undefined ? { chatSyncEnabled: input.chatSyncEnabled } : {}),
+        updatedById: userId,
+      },
+    });
+    const missingFields = this.missingFields(channel.type, saved);
+    const checked = await this.prisma.channelConnection.update({
+      where: { id: saved.id },
+      data: {
+        status: missingFields.length ? ChannelConnectionStatus.INCOMPLETE : ChannelConnectionStatus.READY,
+        lastCheckedAt: new Date(),
+        lastError: missingFields.length ? `Thiếu: ${missingFields.join(', ')}` : null,
+      },
+    });
+    return this.connectionView(channel, checked);
+  }
+
+  async checkConnection(organizationId: string, channelId: string) {
+    const channel = await this.prisma.salesChannelAccount.findFirst({ where: { id: channelId, organizationId }, include: { connection: true } });
+    if (!channel) throw new NotFoundException('Không tìm thấy kênh bán');
+    if (channel.type === ChannelType.OFFLINE_STORE) throw new BadRequestException('Kênh POS nội bộ không cần cấu hình API');
+    if (!channel.connection) return this.connectionView(channel, null);
+    const missingFields = this.missingFields(channel.type, channel.connection);
+    const checked = await this.prisma.channelConnection.update({
+      where: { id: channel.connection.id },
+      data: {
+        status: missingFields.length ? ChannelConnectionStatus.INCOMPLETE : ChannelConnectionStatus.READY,
+        lastCheckedAt: new Date(),
+        lastError: missingFields.length ? `Thiếu: ${missingFields.join(', ')}` : null,
+      },
+    });
+    return { ...this.connectionView(channel, checked), externalVerified: false, note: missingFields.length ? 'Cấu hình chưa đủ để khởi tạo connector.' : 'Cấu hình đã đủ; sẽ xác thực với API nền tảng khi bật connector chính thức.' };
+  }
+
   async syncInventory(organizationId: string, channelId: string, userId: string) {
     const channel = await this.prisma.salesChannelAccount.findFirst({ where: { id: channelId, organizationId, active: true }, include: { skuMappings: { include: { variant: { include: { product: { select: { active: true } }, balances: { include: { warehouse: true } } } } } } } });
     if (!channel) throw new NotFoundException('Không tìm thấy kênh bán đang hoạt động');
@@ -18,6 +120,7 @@ export class ChannelsService {
       return tx.channelSyncRun.create({ data: { channelAccountId: channel.id, status: ChannelSyncStatus.SUCCEEDED, mappedSkuCount: snapshot.length, processedCount: snapshot.length, snapshot, triggeredById: userId, completedAt: new Date() } });
     });
   }
+
   async syncSummary(organizationId: string) {
     const staleBefore = new Date(Date.now() - 15 * 60_000); const today = new Date(); today.setHours(0, 0, 0, 0);
     const [pending, stale, failed, succeededToday] = await Promise.all([
@@ -28,9 +131,48 @@ export class ChannelsService {
     ]);
     return { pending, stale, failed, succeededToday };
   }
+
   async processPending(organizationId: string, userId: string) {
     const pendingChannels = await this.prisma.salesChannelAccount.findMany({ where: { organizationId, active: true, syncRuns: { some: { status: ChannelSyncStatus.RUNNING } } }, select: { id: true } });
     const runs = []; for (const channel of pendingChannels) runs.push(await this.syncInventory(organizationId, channel.id, userId));
     return { processedChannels: runs.length, runs };
+  }
+
+  private missingFields(type: ChannelType, connection: ChannelConnection | null) {
+    if (type === ChannelType.OFFLINE_STORE) return [];
+    const missing: string[] = [];
+    if (!connection?.clientId) missing.push(type === ChannelType.SHOPEE ? 'Partner ID' : 'App/Client ID');
+    if (!connection?.accountIdentifier) missing.push(type === ChannelType.SHOPEE ? 'Shop ID' : type === ChannelType.FACEBOOK_MESSENGER ? 'Page ID' : 'Shop/Cửa hàng ID');
+    if (!connection?.clientSecretEncrypted) missing.push(type === ChannelType.SHOPEE ? 'Partner Key' : 'Client Secret');
+    if (!connection?.accessTokenEncrypted) missing.push(type === ChannelType.FACEBOOK_MESSENGER ? 'Page Access Token' : 'Access Token');
+    if (type === ChannelType.FACEBOOK_MESSENGER && !connection?.webhookSecretEncrypted) missing.push('Webhook Secret');
+    return missing;
+  }
+
+  private connectionView(channel: { id: string; type: ChannelType }, connection: ChannelConnection | null) {
+    const applicable = channel.type !== ChannelType.OFFLINE_STORE;
+    const missingFields = applicable ? this.missingFields(channel.type, connection) : [];
+    const apiPublicUrl = (process.env.API_PUBLIC_URL ?? `http://localhost:${process.env.API_PORT ?? 4000}`).replace(/\/$/, '');
+    return {
+      applicable,
+      status: applicable ? connection?.status ?? ChannelConnectionStatus.INCOMPLETE : 'NOT_REQUIRED',
+      ready: applicable ? Boolean(connection) && missingFields.length === 0 : true,
+      missingFields,
+      environment: connection?.environment ?? 'PRODUCTION',
+      clientId: connection?.clientId ?? '',
+      accountIdentifier: connection?.accountIdentifier ?? '',
+      apiBaseUrl: connection?.apiBaseUrl ?? '',
+      hasClientSecret: Boolean(connection?.clientSecretEncrypted),
+      hasAccessToken: Boolean(connection?.accessTokenEncrypted),
+      hasRefreshToken: Boolean(connection?.refreshTokenEncrypted),
+      hasWebhookSecret: Boolean(connection?.webhookSecretEncrypted),
+      orderSyncEnabled: connection?.orderSyncEnabled ?? false,
+      inventorySyncEnabled: connection?.inventorySyncEnabled ?? false,
+      chatSyncEnabled: connection?.chatSyncEnabled ?? false,
+      lastCheckedAt: connection?.lastCheckedAt ?? null,
+      lastError: connection?.lastError ?? null,
+      webhookUrl: applicable ? `${apiPublicUrl}/api/channels/webhooks/${channel.id}` : null,
+      updatedAt: connection?.updatedAt ?? null,
+    };
   }
 }

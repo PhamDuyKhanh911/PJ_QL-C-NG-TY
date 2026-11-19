@@ -55,6 +55,12 @@ enum ChannelSyncStatus {
   FAILED
 }
 
+enum ChannelConnectionStatus {
+  INCOMPLETE
+  READY
+  ERROR
+}
+
 enum PurchaseOrderStatus {
   DRAFT
   ORDERED
@@ -254,7 +260,32 @@ model SalesChannelAccount {
   conversations  Conversation[]
   syncRuns       ChannelSyncRun[]
   settlements    OrderSettlement[]
+  connection     ChannelConnection?
   @@unique([organizationId, code])
+}
+
+model ChannelConnection {
+  id                      String @id @default(cuid())
+  channelAccountId        String @unique
+  environment             String @default("PRODUCTION")
+  clientId                String?
+  accountIdentifier       String?
+  apiBaseUrl              String?
+  clientSecretEncrypted   String?
+  accessTokenEncrypted    String?
+  refreshTokenEncrypted   String?
+  webhookSecretEncrypted  String?
+  status                  ChannelConnectionStatus @default(INCOMPLETE)
+  orderSyncEnabled        Boolean @default(true)
+  inventorySyncEnabled    Boolean @default(true)
+  chatSyncEnabled         Boolean @default(false)
+  lastCheckedAt           DateTime?
+  lastError               String?
+  updatedById             String?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+  channelAccount          SalesChannelAccount @relation(fields: [channelAccountId], references: [id])
+  @@index([status, updatedAt])
 }
 
 model ChannelSyncRun {
