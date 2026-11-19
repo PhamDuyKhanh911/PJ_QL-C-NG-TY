@@ -377,6 +377,8 @@ model SalesOrder {
   warehouseId      String?
   customerId       String?
   externalOrderId  String?
+  externalStatus   String?
+  externalStatusUpdatedAt DateTime?
   status           OrderStatus
   subtotal         Decimal @db.Decimal(18, 2)
   discount         Decimal @default(0) @db.Decimal(18, 2)
@@ -397,6 +399,7 @@ model SalesOrder {
   fulfillmentEvents OrderFulfillmentEvent[]
   settlement     OrderSettlement?
   @@unique([channelAccountId, externalOrderId])
+  @@index([channelAccountId, externalStatus])
 }
 
 model OrderSettlement {

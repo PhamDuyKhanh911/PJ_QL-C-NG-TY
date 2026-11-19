@@ -228,6 +228,30 @@ export class ChannelWebhookService implements OnModuleInit, OnModuleDestroy {
       await this.sales.syncMarketplace(event.channelAccount.organizationId, `SYSTEM_WEBHOOK:${event.channelAccountId}`, input);
       return { ignored: false, note: null };
     }
+    const performedById = `SYSTEM_WEBHOOK:${event.channelAccountId}`;
+    if (['ORDER_CANCELLED', 'ORDER_CANCELED', 'ORDER_CANCEL'].includes(type)) {
+      const statusInput = this.marketplaceStatus(data, 'CANCELLED');
+      const result = await this.sales.syncMarketplaceStatus(event.channelAccount.organizationId, event.channelAccountId, performedById, statusInput);
+      if (result.action === 'RETURN_PROCESS_REQUIRED') {
+        const returnResult = await this.sales.registerMarketplaceReturn(event.channelAccount.organizationId, event.channelAccountId, performedById, {
+          externalOrderId: statusInput.externalOrderId,
+          sourceEventId: event.providerEventId,
+          reasonCode: statusInput.reasonCode ?? 'CHANNEL_CANCEL_AFTER_DISPATCH',
+          occurredAt: statusInput.occurredAt,
+        });
+        return { ignored: false, note: returnResult.action };
+      }
+      return { ignored: false, note: result.note ?? result.action };
+    }
+    if (['ORDER_SHIPPED', 'ORDER_DELIVERED', 'ORDER_STATUS_UPDATED', 'ORDER_UPDATED'].includes(type)) {
+      const fallback = type === 'ORDER_SHIPPED' ? 'SHIPPED' : type === 'ORDER_DELIVERED' ? 'DELIVERED' : undefined;
+      const result = await this.sales.syncMarketplaceStatus(event.channelAccount.organizationId, event.channelAccountId, performedById, this.marketplaceStatus(data, fallback));
+      return { ignored: false, note: result.note ?? result.action };
+    }
+    if (['RETURN_REQUESTED', 'ORDER_RETURN_REQUESTED', 'RETURN_CREATED', 'ORDER_RETURNED'].includes(type)) {
+      const result = await this.sales.registerMarketplaceReturn(event.channelAccount.organizationId, event.channelAccountId, performedById, this.marketplaceReturn(data, event.providerEventId));
+      return { ignored: false, note: result.action };
+    }
     if (['MESSAGE_RECEIVED', 'INBOUND_MESSAGE', 'MESSAGING_MESSAGE'].includes(type)) {
       const input = this.inboundMessage(data);
       await this.conversations.ingestInbound(event.channelAccount.organizationId, event.channelAccountId, input);
@@ -269,6 +293,36 @@ export class ChannelWebhookService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException('Sự kiện tin nhắn thiếu mã hội thoại, mã tin, người gửi, nội dung hoặc thời gian');
     }
     return input;
+  }
+
+  private marketplaceStatus(data: JsonObject, fallbackStatus?: string) {
+    const externalOrderId = this.stringValue(data.externalOrderId);
+    const externalStatus = this.stringValue(data.externalStatus) || fallbackStatus || '';
+    if (!externalOrderId || !externalStatus) throw new BadRequestException('Sự kiện trạng thái thiếu externalOrderId hoặc externalStatus');
+    return {
+      externalOrderId,
+      externalStatus,
+      occurredAt: this.optionalString(data.occurredAt),
+      reasonCode: this.optionalString(data.reasonCode),
+    };
+  }
+
+  private marketplaceReturn(data: JsonObject, sourceEventId: string) {
+    const externalOrderId = this.stringValue(data.externalOrderId);
+    if (!externalOrderId) throw new BadRequestException('Sự kiện hoàn thiếu externalOrderId');
+    const rawItems = Array.isArray(data.items) ? data.items : [];
+    const items = rawItems.filter(this.isObject).map((item) => ({
+      externalSkuId: this.stringValue(item.externalSkuId),
+      quantity: Number(item.quantity),
+    }));
+    if (items.some((item) => !item.externalSkuId || !Number.isInteger(item.quantity) || item.quantity < 1)) throw new BadRequestException('Sự kiện hoàn chứa SKU hoặc số lượng không hợp lệ');
+    return {
+      externalOrderId,
+      sourceEventId,
+      reasonCode: this.optionalString(data.reasonCode),
+      occurredAt: this.optionalString(data.occurredAt),
+      items: items.length ? items : undefined,
+    };
   }
 
   private verifySignature(

@@ -8,6 +8,21 @@ import { ListOrdersDto } from './dto/list-orders.dto';
 import { queueInventorySync } from '../channels/queue-inventory-sync';
 import { SyncMarketplaceOrderDto } from './dto/sync-marketplace-order.dto';
 
+export type MarketplaceStatusInput = {
+  externalOrderId: string;
+  externalStatus: string;
+  occurredAt?: string;
+  reasonCode?: string;
+};
+
+export type MarketplaceReturnInput = {
+  externalOrderId: string;
+  sourceEventId: string;
+  reasonCode?: string;
+  occurredAt?: string;
+  items?: Array<{ externalSkuId: string; quantity: number }>;
+};
+
 @Injectable()
 export class SalesService {
   constructor(private readonly prisma: PrismaService) {}
@@ -20,7 +35,7 @@ export class SalesService {
       ...(query.from || query.to ? { orderedAt: { ...(query.from ? { gte: new Date(query.from) } : {}), ...(query.to ? { lte: new Date(query.to) } : {}) } } : {}),
     };
     const [data, total] = await this.prisma.$transaction([
-      this.prisma.salesOrder.findMany({ where, include: { channelAccount: true, warehouse: true, customer: true, items: { include: { variant: { include: { product: true } } } }, afterSales: true }, orderBy: { orderedAt: 'desc' }, skip: (query.page - 1) * query.limit, take: query.limit }),
+      this.prisma.salesOrder.findMany({ where, include: { channelAccount: true, warehouse: true, customer: true, items: { include: { variant: { include: { product: true } } } }, afterSales: true, fulfillmentEvents: { orderBy: { createdAt: 'desc' }, take: 1 } }, orderBy: { orderedAt: 'desc' }, skip: (query.page - 1) * query.limit, take: query.limit }),
       this.prisma.salesOrder.count({ where }),
     ]);
     return { data, total, page: query.page, limit: query.limit };
@@ -112,9 +127,230 @@ export class SalesService {
       }
       const subtotal = normalized.reduce((sum, item) => sum.add(item.variant.salePrice.mul(item.quantity)), new Prisma.Decimal(0));
       const customer = input.customerName ? await tx.customer.create({ data: { organizationId, displayName: input.customerName } }) : null;
-      const order = await tx.salesOrder.create({ data: { id: orderId, orderNumber: `${channel.code}-${input.externalOrderId}`, channelAccountId: channel.id, warehouseId: warehouse.id, customerId: customer?.id, externalOrderId: input.externalOrderId, status: OrderStatus.CONFIRMED, subtotal, total: subtotal, orderedAt: new Date(input.orderedAt), items: { create: normalized.map((item) => ({ variantId: item.variant.id, quantity: item.quantity, unitPrice: item.variant.salePrice })) } }, include: { items: true, channelAccount: true, warehouse: true } });
+      const order = await tx.salesOrder.create({ data: { id: orderId, orderNumber: `${channel.code}-${input.externalOrderId}`, channelAccountId: channel.id, warehouseId: warehouse.id, customerId: customer?.id, externalOrderId: input.externalOrderId, externalStatus: 'CONFIRMED', externalStatusUpdatedAt: new Date(input.orderedAt), status: OrderStatus.CONFIRMED, subtotal, total: subtotal, orderedAt: new Date(input.orderedAt), items: { create: normalized.map((item) => ({ variantId: item.variant.id, quantity: item.quantity, unitPrice: item.variant.salePrice })) } }, include: { items: true, channelAccount: true, warehouse: true } });
       await queueInventorySync(tx, normalized.map((item) => item.variant.id), performedById, 'MARKETPLACE_ORDER_SYNCED');
       return { order, duplicated: false };
+    });
+  }
+
+  async syncMarketplaceStatus(organizationId: string, channelAccountId: string, performedById: string, input: MarketplaceStatusInput) {
+    const order = await this.prisma.salesOrder.findFirst({
+      where: {
+        channelAccountId,
+        externalOrderId: input.externalOrderId,
+        channelAccount: { organizationId, type: { in: [ChannelType.SHOPEE, ChannelType.TIKTOK_SHOP] } },
+      },
+      include: { items: { include: { variant: true } }, channelAccount: true },
+    });
+    if (!order || !order.warehouseId) throw new NotFoundException('Không tìm thấy đơn sàn hoặc đơn chưa được phân kho');
+    const externalStatus = this.normalizeExternalStatus(input.externalStatus);
+    if (!externalStatus) throw new BadRequestException('Trạng thái đơn từ sàn không hợp lệ');
+    const occurredAt = input.occurredAt ? new Date(input.occurredAt) : new Date();
+    if (Number.isNaN(occurredAt.getTime())) throw new BadRequestException('Thời gian cập nhật trạng thái sàn không hợp lệ');
+    const cancelledStatuses = ['CANCELLED', 'CANCELED', 'CANCEL', 'VOIDED'];
+    const shippedStatuses = ['SHIPPED', 'IN_TRANSIT', 'IN_DELIVERY'];
+    const deliveredStatuses = ['DELIVERED', 'COMPLETED'];
+
+    if (cancelledStatuses.includes(externalStatus)) {
+      if (order.status === OrderStatus.CANCELLED) {
+        const current = await this.prisma.salesOrder.update({ where: { id: order.id }, data: { externalStatus, externalStatusUpdatedAt: occurredAt } });
+        return { order: current, action: 'ALREADY_CANCELLED', inventoryReleased: false };
+      }
+      const cancellable: OrderStatus[] = [OrderStatus.PENDING, OrderStatus.CONFIRMED, OrderStatus.PACKING];
+      if (!cancellable.includes(order.status)) {
+        if (([OrderStatus.SHIPPED, OrderStatus.DELIVERED] as OrderStatus[]).includes(order.status)) {
+          const updated = await this.prisma.$transaction(async (tx) => {
+            const current = await tx.salesOrder.update({ where: { id: order.id }, data: { externalStatus, externalStatusUpdatedAt: occurredAt } });
+            await tx.orderFulfillmentEvent.create({
+              data: {
+                orderId: order.id,
+                action: 'CHANNEL_CANCEL_AFTER_DISPATCH',
+                fromStatus: order.status,
+                toStatus: order.status,
+                performedById,
+                carrierName: order.channelAccount.name,
+                trackingCode: order.externalOrderId,
+                note: 'Không cộng tồn; chuyển sang chờ đơn vị vận chuyển hoàn hàng về kho',
+              },
+            });
+            return current;
+          });
+          return { order: updated, action: 'RETURN_PROCESS_REQUIRED', inventoryReleased: false, note: 'Đơn đã xuất kho; phải nhận hàng hoàn thực tế trước khi kiểm định và cộng tồn' };
+        }
+        if (([OrderStatus.RETURNED, OrderStatus.PARTIALLY_RETURNED] as OrderStatus[]).includes(order.status)) {
+          const current = await this.prisma.salesOrder.update({ where: { id: order.id }, data: { externalStatus, externalStatusUpdatedAt: occurredAt } });
+          return { order: current, action: 'RETURN_ALREADY_IN_PROGRESS', inventoryReleased: false };
+        }
+        throw new BadRequestException('Trạng thái nội bộ không cho phép hủy tự động');
+      }
+      return this.prisma.$transaction(async (tx) => {
+        const changed = await tx.salesOrder.updateMany({
+          where: { id: order.id, status: { in: cancellable } },
+          data: { status: OrderStatus.CANCELLED, externalStatus, externalStatusUpdatedAt: occurredAt },
+        });
+        if (changed.count !== 1) throw new BadRequestException('Đơn vừa được tác vụ khác thay đổi; chưa giải phóng tồn');
+        for (const item of order.items) {
+          const released = await tx.$executeRaw(Prisma.sql`
+            UPDATE "InventoryBalance" SET "reserved" = "reserved" - ${item.quantity}
+            WHERE "warehouseId" = ${order.warehouseId} AND "variantId" = ${item.variantId}
+              AND "reserved" >= ${item.quantity}
+          `);
+          if (released !== 1) throw new BadRequestException(`Tồn giữ chỗ SKU ${item.variant.sku} không đủ để giải phóng; giao dịch đã được hoàn tác`);
+          await tx.inventoryTransaction.create({
+            data: {
+              warehouseId: order.warehouseId!,
+              variantId: item.variantId,
+              type: InventoryTransactionType.RESERVATION_RELEASE,
+              quantity: item.quantity,
+              reason: `Sàn hủy đơn: ${input.reasonCode ?? externalStatus}`,
+              referenceType: 'SALES_ORDER',
+              referenceId: order.id,
+              performedById,
+            },
+          });
+        }
+        await tx.afterSaleRequest.create({
+          data: {
+            orderId: order.id,
+            type: AfterSaleType.CANCELLATION,
+            reasonCode: `CHANNEL_CANCEL|${input.reasonCode ?? externalStatus}`,
+            responsibleParty: 'MARKETPLACE_OR_CUSTOMER',
+            quantity: order.items.reduce((sum, item) => sum + item.quantity, 0),
+            status: 'COMPLETED',
+          },
+        });
+        await tx.orderFulfillmentEvent.create({
+          data: {
+            orderId: order.id,
+            action: 'CHANNEL_CANCELLED_BEFORE_DISPATCH',
+            fromStatus: order.status,
+            toStatus: OrderStatus.CANCELLED,
+            performedById,
+            carrierName: order.channelAccount.name,
+            trackingCode: order.externalOrderId,
+            note: input.reasonCode ?? externalStatus,
+          },
+        });
+        await queueInventorySync(tx, order.items.map((item) => item.variantId), performedById, 'CHANNEL_ORDER_CANCELLED');
+        const updated = await tx.salesOrder.findUniqueOrThrow({ where: { id: order.id }, include: { channelAccount: true, items: true } });
+        return { order: updated, action: 'CANCELLED_AND_RESERVATION_RELEASED', inventoryReleased: true };
+      });
+    }
+
+    if (deliveredStatuses.includes(externalStatus) && order.status === OrderStatus.SHIPPED) {
+      return this.prisma.$transaction(async (tx) => {
+        const changed = await tx.salesOrder.updateMany({
+          where: { id: order.id, status: OrderStatus.SHIPPED },
+          data: { status: OrderStatus.DELIVERED, externalStatus, externalStatusUpdatedAt: occurredAt },
+        });
+        if (changed.count !== 1) throw new BadRequestException('Đơn vừa thay đổi trạng thái; vui lòng đồng bộ lại');
+        await tx.orderFulfillmentEvent.create({
+          data: {
+            orderId: order.id,
+            action: 'CHANNEL_DELIVERY_CONFIRMED',
+            fromStatus: OrderStatus.SHIPPED,
+            toStatus: OrderStatus.DELIVERED,
+            performedById,
+            carrierName: order.channelAccount.name,
+            trackingCode: order.externalOrderId,
+            note: `Sàn xác nhận ${externalStatus}`,
+          },
+        });
+        return { order: await tx.salesOrder.findUniqueOrThrow({ where: { id: order.id } }), action: 'DELIVERED', inventoryReleased: false };
+      });
+    }
+
+    const warehouseCompletedStatuses: OrderStatus[] = [OrderStatus.SHIPPED, OrderStatus.DELIVERED, OrderStatus.RETURNED, OrderStatus.PARTIALLY_RETURNED];
+    const warehouseGateRequired = [...shippedStatuses, ...deliveredStatuses].includes(externalStatus) && !warehouseCompletedStatuses.includes(order.status);
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const current = await tx.salesOrder.update({ where: { id: order.id }, data: { externalStatus, externalStatusUpdatedAt: occurredAt } });
+      if (warehouseGateRequired) {
+        await tx.orderFulfillmentEvent.create({
+          data: {
+            orderId: order.id,
+            action: 'CHANNEL_STATUS_WAITING_WAREHOUSE',
+            fromStatus: order.status,
+            toStatus: order.status,
+            performedById,
+            carrierName: order.channelAccount.name,
+            trackingCode: order.externalOrderId,
+            note: `Sàn báo ${externalStatus} nhưng kho chưa xác nhận xuất`,
+          },
+        });
+      }
+      return current;
+    });
+    return {
+      order: updated,
+      action: warehouseGateRequired ? 'WAREHOUSE_CONFIRMATION_REQUIRED' : 'EXTERNAL_STATUS_RECORDED',
+      inventoryReleased: false,
+      note: warehouseGateRequired ? 'Đã ghi trạng thái sàn nhưng giữ nguyên trạng thái nội bộ để chờ thủ kho xác nhận xuất' : undefined,
+    };
+  }
+
+  async registerMarketplaceReturn(organizationId: string, channelAccountId: string, performedById: string, input: MarketplaceReturnInput) {
+    const order = await this.prisma.salesOrder.findFirst({
+      where: {
+        channelAccountId,
+        externalOrderId: input.externalOrderId,
+        channelAccount: { organizationId, type: { in: [ChannelType.SHOPEE, ChannelType.TIKTOK_SHOP] } },
+      },
+      include: { items: true, afterSales: true, channelAccount: true },
+    });
+    if (!order) throw new NotFoundException('Không tìm thấy đơn sàn cần hoàn');
+    const eligible: OrderStatus[] = [OrderStatus.SHIPPED, OrderStatus.DELIVERED, OrderStatus.PARTIALLY_RETURNED];
+    if (!eligible.includes(order.status)) throw new BadRequestException('Đơn chưa xuất kho; yêu cầu từ sàn phải xử lý là hủy đơn thay vì nhập hàng hoàn');
+    if (order.afterSales.some((request) => request.reasonCode.includes(`SOURCE_EVENT:${input.sourceEventId}`))) {
+      return { order, duplicated: true, created: 0, action: 'RETURN_ALREADY_REGISTERED' };
+    }
+    let requested: Array<{ variantId: string; quantity: number }>;
+    if (input.items?.length) {
+      const mappings = await this.prisma.channelSkuMapping.findMany({
+        where: { channelAccountId, externalSkuId: { in: input.items.map((item) => item.externalSkuId) } },
+      });
+      const byExternalSku = new Map(mappings.map((mapping) => [mapping.externalSkuId, mapping.variantId]));
+      requested = input.items.map((item) => ({ variantId: byExternalSku.get(item.externalSkuId) ?? '', quantity: item.quantity }));
+      if (requested.some((item) => !item.variantId || !Number.isInteger(item.quantity) || item.quantity < 1)) throw new BadRequestException('Yêu cầu hoàn chứa SKU chưa ánh xạ hoặc số lượng không hợp lệ');
+    } else {
+      requested = order.items.map((item) => ({ variantId: item.variantId, quantity: item.quantity }));
+    }
+    for (const item of requested) {
+      const ordered = order.items.find((orderItem) => orderItem.variantId === item.variantId)?.quantity ?? 0;
+      const alreadyRequested = order.afterSales.filter((request) => request.status !== 'REJECTED' && request.reasonCode.includes(`SKU:${item.variantId}`)).reduce((sum, request) => sum + request.quantity, 0);
+      if (!ordered || alreadyRequested + item.quantity > ordered) throw new BadRequestException('Số lượng hoàn từ sàn vượt quá số lượng đã bán hoặc đã có yêu cầu trước đó');
+    }
+    const occurredAt = input.occurredAt ? new Date(input.occurredAt) : new Date();
+    if (Number.isNaN(occurredAt.getTime())) throw new BadRequestException('Thời gian yêu cầu hoàn không hợp lệ');
+    return this.prisma.$transaction(async (tx) => {
+      await tx.afterSaleRequest.createMany({
+        data: requested.map((item) => ({
+          orderId: order.id,
+          type: AfterSaleType.RETURN,
+          reasonCode: `${input.reasonCode ?? 'MARKETPLACE_RETURN'}|SKU:${item.variantId}|SOURCE_EVENT:${input.sourceEventId}`,
+          responsibleParty: 'CARRIER',
+          quantity: item.quantity,
+          status: 'AWAITING_RETURN',
+        })),
+      });
+      await tx.salesOrder.update({ where: { id: order.id }, data: { externalStatus: 'RETURN_REQUESTED', externalStatusUpdatedAt: occurredAt } });
+      await tx.orderFulfillmentEvent.create({
+        data: {
+          orderId: order.id,
+          action: 'CHANNEL_RETURN_AWAITING_WAREHOUSE',
+          fromStatus: order.status,
+          toStatus: order.status,
+          performedById,
+          carrierName: order.channelAccount.name,
+          trackingCode: order.externalOrderId,
+          note: 'Chỉ nhập tồn kiểm định sau khi thủ kho nhận hàng hoàn thực tế',
+        },
+      });
+      return {
+        order: await tx.salesOrder.findUniqueOrThrow({ where: { id: order.id } }),
+        duplicated: false,
+        created: requested.length,
+        action: 'RETURN_AWAITING_WAREHOUSE',
+      };
     });
   }
 
@@ -148,5 +384,9 @@ export class SalesService {
       return { id: channel.id, name: channel.name, type: channel.type, orders: channelOrders.length, revenue: channelOrders.filter((order) => order.status !== OrderStatus.CANCELLED).reduce((sum, order) => sum.add(order.total), new Prisma.Decimal(0)), cancellationRate: channelOrders.length ? channelCancelled / channelOrders.length : 0 };
     });
     return { total, cancelled, delivered, returned, exchanged, cancellationRate: total ? cancelled / total : 0, returnRate: delivered ? returned / delivered : 0, exchangeRate: delivered ? exchanged / delivered : 0, byChannel };
+  }
+
+  private normalizeExternalStatus(value: string) {
+    return value.trim().toUpperCase().replace(/[\s.-]+/g, '_');
   }
 }
