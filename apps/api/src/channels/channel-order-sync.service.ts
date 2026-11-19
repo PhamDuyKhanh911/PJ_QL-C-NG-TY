@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ChannelConnectionStatus, ChannelSyncStatus, ChannelType, Prisma } from '@prisma/client';
 import { createHmac } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -10,12 +10,58 @@ type PulledLine = { candidates: string[]; quantity: number; unitPrice?: number }
 type PulledOrder = { externalOrderId: string; externalStatus: string; orderedAt: Date; updatedAt: Date; customerName?: string; lines: PulledLine[] };
 
 @Injectable()
-export class ChannelOrderSyncService {
+export class ChannelOrderSyncService implements OnModuleInit, OnModuleDestroy {
+  private worker?: NodeJS.Timeout;
+  private workerBusy = false;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly sales: SalesService,
     private readonly cipher: ChannelCredentialCipherService,
   ) {}
+
+  onModuleInit() {
+    this.worker = setInterval(() => void this.runWorker(), 60_000);
+    this.worker.unref();
+  }
+
+  onModuleDestroy() {
+    if (this.worker) clearInterval(this.worker);
+  }
+
+  async processDue(organizationId?: string, limit = 10) {
+    const now = new Date();
+    const dueBefore = new Date(now.getTime() - 5 * 60_000);
+    const connections = await this.prisma.channelConnection.findMany({
+      where: {
+        orderSyncEnabled: true,
+        status: ChannelConnectionStatus.READY,
+        defaultWarehouseId: { not: null },
+        accessTokenEncrypted: { not: null },
+        accessTokenExpiresAt: { gt: now },
+        OR: [{ lastOrderSyncAt: null }, { lastOrderSyncAt: { lte: dueBefore } }],
+        AND: [{ OR: [{ orderSyncLeaseUntil: null }, { orderSyncLeaseUntil: { lt: now } }] }],
+        channelAccount: {
+          active: true,
+          type: { in: [ChannelType.SHOPEE, ChannelType.TIKTOK_SHOP] },
+          ...(organizationId ? { organizationId } : {}),
+        },
+      },
+      select: { channelAccountId: true, channelAccount: { select: { organizationId: true } } },
+      orderBy: [{ lastOrderSyncAt: { sort: 'asc', nulls: 'first' } }, { updatedAt: 'asc' }],
+      take: Math.min(Math.max(limit, 1), 50),
+    });
+    const results: Array<{ channelAccountId: string; ok: boolean; error?: string }> = [];
+    for (const connection of connections) {
+      try {
+        await this.sync(connection.channelAccount.organizationId, connection.channelAccountId, 'SYSTEM_ORDER_SCHEDULER');
+        results.push({ channelAccountId: connection.channelAccountId, ok: true });
+      } catch (reason) {
+        results.push({ channelAccountId: connection.channelAccountId, ok: false, error: this.message(reason) });
+      }
+    }
+    return { selected: connections.length, succeeded: results.filter((item) => item.ok).length, failed: results.filter((item) => !item.ok).length, results };
+  }
 
   async sync(organizationId: string, channelId: string, userId: string) {
     const channel = await this.prisma.salesChannelAccount.findFirst({
@@ -209,4 +255,12 @@ export class ChannelOrderSyncService {
   private date(value: unknown): Date { const numeric = Number(value); const date = Number.isFinite(numeric) && numeric > 0 ? new Date(numeric * 1000) : new Date(String(value ?? '')); return Number.isNaN(date.getTime()) ? new Date() : date; }
   private message(reason: unknown): string { return reason instanceof Error ? reason.message : String(reason); }
   private apiError(payload: JsonObject, fallback: string) { return this.string(payload.message) || this.string(payload.error) || fallback; }
+
+  private async runWorker() {
+    if (this.workerBusy) return;
+    this.workerBusy = true;
+    try { await this.processDue(undefined, 10); }
+    catch (reason) { console.error('Marketplace order scheduler failed', reason); }
+    finally { this.workerBusy = false; }
+  }
 }
