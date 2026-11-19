@@ -270,6 +270,7 @@ model SalesChannelAccount {
   settlements    OrderSettlement[]
   connection     ChannelConnection?
   webhookEvents  ChannelWebhookEvent[]
+  oauthSessions  ChannelOAuthSession[]
   @@unique([organizationId, code])
 }
 
@@ -278,6 +279,7 @@ model ChannelConnection {
   channelAccountId        String @unique
   environment             String @default("PRODUCTION")
   clientId                String?
+  authorizationIdentifier String?
   accountIdentifier       String?
   apiBaseUrl              String?
   clientSecretEncrypted   String?
@@ -302,6 +304,23 @@ model ChannelConnection {
   channelAccount          SalesChannelAccount @relation(fields: [channelAccountId], references: [id])
   @@index([status, updatedAt])
   @@index([tokenRefreshStatus, accessTokenExpiresAt])
+}
+
+model ChannelOAuthSession {
+  id               String @id @default(cuid())
+  channelAccountId String
+  stateHash        String @unique
+  provider         ChannelType
+  callbackUrl      String
+  status           String @default("PENDING")
+  expiresAt        DateTime
+  createdById      String
+  consumedAt       DateTime?
+  errorMessage     String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  channelAccount   SalesChannelAccount @relation(fields: [channelAccountId], references: [id])
+  @@index([channelAccountId, status, expiresAt])
 }
 
 model ChannelSyncRun {

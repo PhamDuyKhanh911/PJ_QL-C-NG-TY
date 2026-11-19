@@ -3,6 +3,7 @@ import { ChannelConnection, ChannelConnectionStatus, ChannelSyncStatus, ChannelT
 import { PrismaService } from '../prisma/prisma.service';
 import { ChannelCredentialCipherService } from './channel-credential-cipher.service';
 import { ChannelTokenService } from './channel-token.service';
+import { ChannelOAuthService } from './channel-oauth.service';
 import { UpdateChannelConnectionDto } from './dto/update-channel-connection.dto';
 
 @Injectable()
@@ -11,6 +12,7 @@ export class ChannelsService {
     private readonly prisma: PrismaService,
     private readonly credentialCipher: ChannelCredentialCipherService,
     private readonly tokens: ChannelTokenService,
+    private readonly oauth: ChannelOAuthService,
   ) {}
 
   async list(organizationId: string) {
@@ -58,6 +60,7 @@ export class ChannelsService {
         channelAccountId: channel.id,
         environment: input.environment ?? 'PRODUCTION',
         clientId: input.clientId?.trim() || null,
+        authorizationIdentifier: input.authorizationIdentifier?.trim() || null,
         accountIdentifier: input.accountIdentifier?.trim() || null,
         apiBaseUrl: input.apiBaseUrl?.trim() || null,
         clientSecretEncrypted: input.clientSecret ? this.credentialCipher.encrypt(input.clientSecret) : null,
@@ -75,6 +78,7 @@ export class ChannelsService {
       update: {
         ...(input.environment !== undefined ? { environment: input.environment } : {}),
         ...(input.clientId !== undefined ? { clientId: input.clientId.trim() || null } : {}),
+        ...(input.authorizationIdentifier !== undefined ? { authorizationIdentifier: input.authorizationIdentifier.trim() || null } : {}),
         ...(input.accountIdentifier !== undefined ? { accountIdentifier: input.accountIdentifier.trim() || null } : {}),
         ...(input.apiBaseUrl !== undefined ? { apiBaseUrl: input.apiBaseUrl.trim() || null } : {}),
         ...(input.clientSecret ? { clientSecretEncrypted: this.credentialCipher.encrypt(input.clientSecret) } : {}),
@@ -129,6 +133,10 @@ export class ChannelsService {
     return this.getConnection(organizationId, channelId);
   }
 
+  startOAuth(organizationId: string, userId: string, channelId: string) {
+    return this.oauth.start(organizationId, userId, channelId);
+  }
+
   async syncInventory(organizationId: string, channelId: string, userId: string) {
     const channel = await this.prisma.salesChannelAccount.findFirst({ where: { id: channelId, organizationId, active: true }, include: { connection: true, skuMappings: { include: { variant: { include: { product: { select: { active: true } }, balances: { include: { warehouse: true } } } } } } } });
     if (!channel) throw new NotFoundException('Không tìm thấy kênh bán đang hoạt động');
@@ -166,6 +174,7 @@ export class ChannelsService {
     if (type === ChannelType.OFFLINE_STORE) return [];
     const missing: string[] = [];
     if (!connection?.clientId) missing.push(type === ChannelType.SHOPEE ? 'Partner ID' : 'App/Client ID');
+    if (type === ChannelType.TIKTOK_SHOP && !connection?.authorizationIdentifier) missing.push('TikTok Service ID / Authorization URL');
     if (!connection?.accountIdentifier) missing.push(type === ChannelType.SHOPEE ? 'Shop ID' : type === ChannelType.FACEBOOK_MESSENGER ? 'Page ID' : 'Shop/Cửa hàng ID');
     if (!connection?.clientSecretEncrypted) missing.push(type === ChannelType.SHOPEE ? 'Partner Key' : 'Client Secret');
     if (!connection?.accessTokenEncrypted) missing.push(type === ChannelType.FACEBOOK_MESSENGER ? 'Page Access Token' : 'Access Token');
@@ -186,6 +195,7 @@ export class ChannelsService {
       missingFields,
       environment: connection?.environment ?? 'PRODUCTION',
       clientId: connection?.clientId ?? '',
+      authorizationIdentifier: connection?.authorizationIdentifier ?? '',
       accountIdentifier: connection?.accountIdentifier ?? '',
       apiBaseUrl: connection?.apiBaseUrl ?? '',
       hasClientSecret: Boolean(connection?.clientSecretEncrypted),
@@ -204,6 +214,7 @@ export class ChannelsService {
       lastCheckedAt: connection?.lastCheckedAt ?? null,
       lastError: connection?.lastError ?? null,
       webhookUrl: applicable ? `${apiPublicUrl}/api/channels/webhooks/${channel.id}` : null,
+      oauthCallbackUrl: applicable ? `${apiPublicUrl}/api/channels/oauth/callback/${channel.id}` : null,
       updatedAt: connection?.updatedAt ?? null,
     };
   }

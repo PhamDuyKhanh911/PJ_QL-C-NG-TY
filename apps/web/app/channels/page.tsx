@@ -12,6 +12,7 @@ type Connection = {
   missingFields: string[];
   environment: string;
   clientId: string;
+  authorizationIdentifier: string;
   accountIdentifier: string;
   apiBaseUrl: string;
   hasClientSecret: boolean;
@@ -30,6 +31,7 @@ type Connection = {
   lastCheckedAt?: string;
   lastError?: string;
   webhookUrl?: string;
+  oauthCallbackUrl?: string;
 };
 type Channel = { id: string; code: string; name: string; type: string; active: boolean; mappedSkuCount: number; availableUnits: number; orderCount: number; conversationCount: number; recentSyncs: SyncRun[]; connection: Connection };
 type CurrentUser = { permissions: string[] };
@@ -63,6 +65,12 @@ export default function ChannelsPage() {
   }, [router]);
 
   useEffect(() => { load().catch((reason) => setError(reason.message)); }, [load]);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('oauth') === 'success') setNotice('Seller đã cấp quyền thành công; token và Shop ID đã được lưu mã hóa.');
+    if (params.get('oauth') === 'error') setError(params.get('message') || 'Không thể hoàn tất cấp quyền seller.');
+    if (params.has('oauth')) window.history.replaceState({}, '', window.location.pathname);
+  }, []);
   const canManage = permissions.includes('*') || permissions.includes('channels.manage');
   const canSync = permissions.includes('*') || permissions.includes('channels.sync');
 
@@ -83,6 +91,7 @@ export default function ChannelsPage() {
     const body: Record<string, unknown> = {
       environment: form.get('environment'),
       clientId: form.get('clientId'),
+      authorizationIdentifier: form.get('authorizationIdentifier'),
       accountIdentifier: form.get('accountIdentifier'),
       apiBaseUrl: form.get('apiBaseUrl'),
       orderSyncEnabled: form.get('orderSyncEnabled') === 'on',
@@ -136,6 +145,16 @@ export default function ChannelsPage() {
     finally { setSaving(false); }
   }
 
+  async function startOAuth(channel: Channel) {
+    setSaving(true); setError(''); setNotice('');
+    try {
+      const response = await fetch(`${api}/channels/${channel.id}/oauth/start`, { method: 'POST', headers: { Authorization: `Bearer ${localStorage.getItem('erp_access_token')}` } });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.message ?? 'Không thể khởi tạo OAuth');
+      window.location.assign(payload.authorizationUrl);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Không thể khởi tạo OAuth'); setSaving(false); }
+  }
+
   const metrics = useMemo(() => ({
     active: channels.filter((item) => item.active).length,
     ready: channels.filter((item) => item.connection.applicable && item.connection.ready).length,
@@ -163,21 +182,23 @@ export default function ChannelsPage() {
         <div className="connection-fields">
           <label>Môi trường<select name="environment" defaultValue={configuring.connection.environment}><option value="PRODUCTION">Production</option><option value="SANDBOX">Sandbox</option></select></label>
           <label>{configuring.type === 'SHOPEE' ? 'Partner ID' : 'App / Client ID'}<input name="clientId" defaultValue={configuring.connection.clientId} required /></label>
-          <label>{configuring.type === 'SHOPEE' ? 'Shop ID' : configuring.type === 'FACEBOOK_MESSENGER' ? 'Page ID' : 'Shop / Cửa hàng ID'}<input name="accountIdentifier" defaultValue={configuring.connection.accountIdentifier} required /></label>
+          <label>{configuring.type === 'SHOPEE' ? 'Shop ID' : configuring.type === 'FACEBOOK_MESSENGER' ? 'Page ID' : 'Shop Cipher / Cửa hàng ID'}<input name="accountIdentifier" defaultValue={configuring.connection.accountIdentifier} required={!marketplace(configuring.type)} placeholder={marketplace(configuring.type) ? 'OAuth sẽ tự điền' : ''} /></label>
+          {configuring.type === 'TIKTOK_SHOP' && <label className="scope-field">TikTok Service ID hoặc Authorization URL<input name="authorizationIdentifier" defaultValue={configuring.connection.authorizationIdentifier} placeholder="https://services.tiktokshop.com/open/authorize?service_id=..." required /></label>}
           <label>API Base URL (tùy chọn)<input name="apiBaseUrl" defaultValue={configuring.connection.apiBaseUrl} /></label>
           <label>{configuring.type === 'SHOPEE' ? 'Partner Key' : 'Client Secret'}<input name="clientSecret" type="password" placeholder={configuring.connection.hasClientSecret ? 'Đã lưu ••••••••' : 'Nhập khóa bí mật'} /></label>
           <label>{configuring.type === 'FACEBOOK_MESSENGER' ? 'Page Access Token' : 'Access Token'}<input name="accessToken" type="password" placeholder={configuring.connection.hasAccessToken ? 'Đã lưu ••••••••' : 'Nhập access token'} /></label>
           <label>Refresh Token {marketplace(configuring.type) ? '' : '(tùy chọn)'}<input name="refreshToken" type="password" placeholder={configuring.connection.hasRefreshToken ? 'Đã lưu ••••••••' : 'Nhập refresh token'} /></label>
           <label>Webhook Secret {configuring.type !== 'FACEBOOK_MESSENGER' && '(tùy chọn)'}<input name="webhookSecret" type="password" placeholder={configuring.connection.hasWebhookSecret ? 'Đã lưu ••••••••' : 'Nhập webhook secret'} /></label>
           {marketplace(configuring.type) && <>
-            <label>Access Token hết hạn lúc<input name="accessTokenExpiresAt" type="datetime-local" defaultValue={datetimeLocal(configuring.connection.accessTokenExpiresAt)} required /></label>
+            <label>Access Token hết hạn lúc<input name="accessTokenExpiresAt" type="datetime-local" defaultValue={datetimeLocal(configuring.connection.accessTokenExpiresAt)} /></label>
             <label>Refresh Token hết hạn lúc (nếu biết)<input name="refreshTokenExpiresAt" type="datetime-local" defaultValue={datetimeLocal(configuring.connection.refreshTokenExpiresAt)} /></label>
             <label className="scope-field">Quyền đã cấp, cách nhau bằng dấu phẩy<input name="grantedScopes" defaultValue={configuring.connection.grantedScopes.join(', ')} placeholder="order, product, inventory" /></label>
           </>}
         </div>
         <label className="webhook-url">Webhook URL dự kiến (dùng khi bật connector)<input value={configuring.connection.webhookUrl ?? ''} readOnly /></label>
+        {marketplace(configuring.type) && <label className="webhook-url">OAuth Callback URL đăng ký trên nền tảng<input value={configuring.connection.oauthCallbackUrl ?? ''} readOnly /></label>}
         <div className="sync-options"><label><input type="checkbox" name="orderSyncEnabled" defaultChecked={configuring.connection.orderSyncEnabled || marketplace(configuring.type)} /> Đồng bộ đơn hàng</label><label><input type="checkbox" name="inventorySyncEnabled" defaultChecked={configuring.connection.inventorySyncEnabled || marketplace(configuring.type)} /> Đồng bộ tồn kho</label><label><input type="checkbox" name="chatSyncEnabled" defaultChecked={configuring.connection.chatSyncEnabled || configuring.type === 'FACEBOOK_MESSENGER'} /> Đồng bộ tin nhắn</label></div>
-        <div className="modal-actions">{marketplace(configuring.type) && configuring.connection.hasRefreshToken && <button type="button" className="refresh" disabled={saving} onClick={() => refreshToken(configuring)}>Làm mới token</button>}<button type="button" className="check" disabled={saving} onClick={() => checkConnection(configuring)}>Kiểm tra độ đầy đủ</button><button disabled={saving}>{saving ? 'Đang lưu...' : 'Lưu cấu hình mã hóa'}</button></div>
+        <div className="modal-actions">{marketplace(configuring.type) && configuring.connection.hasClientSecret && <button type="button" className="refresh" disabled={saving} onClick={() => startOAuth(configuring)}>Kết nối OAuth</button>}{marketplace(configuring.type) && configuring.connection.hasRefreshToken && <button type="button" className="refresh" disabled={saving} onClick={() => refreshToken(configuring)}>Làm mới token</button>}<button type="button" className="check" disabled={saving} onClick={() => checkConnection(configuring)}>Kiểm tra độ đầy đủ</button><button disabled={saving}>{saving ? 'Đang lưu...' : 'Lưu cấu hình mã hóa'}</button></div>
       </form>
     </div>}
   </main>;

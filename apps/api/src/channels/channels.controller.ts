@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
+import type { Response } from 'express';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -6,6 +7,7 @@ import { RequirePermissions } from '../auth/permissions.decorator';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { ChannelsService } from './channels.service';
 import { UpdateChannelConnectionDto } from './dto/update-channel-connection.dto';
+import { ChannelOAuthService } from './channel-oauth.service';
 
 @Controller('channels')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -36,9 +38,34 @@ export class ChannelsController {
     return this.channels.refreshToken(user.organizationId, id);
   }
 
+  @Post(':id/oauth/start') @RequirePermissions('channels.manage')
+  startOAuth(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.channels.startOAuth(user.organizationId, user.id, id);
+  }
+
   @Post('process-pending') @RequirePermissions('channels.sync')
   processPending(@CurrentUser() user: AuthenticatedUser) { return this.channels.processPending(user.organizationId, user.id); }
 
   @Post(':id/sync-inventory') @RequirePermissions('channels.sync')
   sync(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) { return this.channels.syncInventory(user.organizationId, id, user.id); }
+}
+
+@Controller('channels/oauth')
+export class ChannelOAuthController {
+  constructor(private readonly oauth: ChannelOAuthService) {}
+
+  @Get('callback/:channelId')
+  async callback(
+    @Param('channelId') channelId: string,
+    @Query('state') state: string | undefined,
+    @Query('code') code: string | undefined,
+    @Query('auth_code') authCode: string | undefined,
+    @Query('shop_id') shopId: string | undefined,
+    @Query('error') error: string | undefined,
+    @Query('error_description') errorDescription: string | undefined,
+    @Res() response: Response,
+  ) {
+    const result = await this.oauth.complete(channelId, { state, code, authCode, shopId, error, errorDescription });
+    return response.redirect(302, result.redirectUrl);
+  }
 }
