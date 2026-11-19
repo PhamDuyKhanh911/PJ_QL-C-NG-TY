@@ -1,7 +1,7 @@
 import { Type } from 'class-transformer';
 import { ArrayMinSize, IsArray, IsNumber, IsOptional, IsString, Min, MinLength, ValidateNested } from 'class-validator';
 
-class CreateVariantDto {
+export class CreateVariantDto {
   @IsString() @MinLength(2) sku!: string;
   @IsOptional() @IsString() barcode?: string;
   @IsString() @MinLength(1) name!: string;
@@ -14,4 +14,3 @@ export class CreateProductDto {
   @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => CreateVariantDto)
   variants!: CreateVariantDto[];
 }
-

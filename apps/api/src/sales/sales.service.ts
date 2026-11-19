@@ -90,7 +90,7 @@ export class SalesService {
     const [channel, warehouse, mappings] = await Promise.all([
       this.prisma.salesChannelAccount.findFirst({ where: { id: input.channelAccountId, organizationId, active: true, type: { in: [ChannelType.SHOPEE, ChannelType.TIKTOK_SHOP] } } }),
       this.prisma.warehouse.findFirst({ where: { id: input.warehouseId, branch: { organizationId } } }),
-      this.prisma.channelSkuMapping.findMany({ where: { channelAccountId: input.channelAccountId, externalSkuId: { in: input.items.map((item) => item.externalSkuId) } }, include: { variant: true } }),
+      this.prisma.channelSkuMapping.findMany({ where: { channelAccountId: input.channelAccountId, externalSkuId: { in: input.items.map((item) => item.externalSkuId) }, variant: { product: { organizationId, active: true } } }, include: { variant: true } }),
     ]);
     if (!channel || !warehouse) throw new NotFoundException('Seller hoặc kho nhận đơn không hợp lệ');
     const mappingByExternalSku = new Map(mappings.map((mapping) => [mapping.externalSkuId, mapping]));
