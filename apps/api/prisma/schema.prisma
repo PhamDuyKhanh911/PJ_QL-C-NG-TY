@@ -61,6 +61,14 @@ enum ChannelConnectionStatus {
   ERROR
 }
 
+enum ChannelWebhookEventStatus {
+  PENDING
+  PROCESSING
+  PROCESSED
+  FAILED
+  IGNORED
+}
+
 enum PurchaseOrderStatus {
   DRAFT
   ORDERED
@@ -261,6 +269,7 @@ model SalesChannelAccount {
   syncRuns       ChannelSyncRun[]
   settlements    OrderSettlement[]
   connection     ChannelConnection?
+  webhookEvents  ChannelWebhookEvent[]
   @@unique([organizationId, code])
 }
 
@@ -303,6 +312,28 @@ model ChannelSyncRun {
   completedAt      DateTime?
   channelAccount   SalesChannelAccount @relation(fields: [channelAccountId], references: [id])
   @@index([channelAccountId, startedAt])
+}
+
+model ChannelWebhookEvent {
+  id                String @id @default(cuid())
+  channelAccountId  String
+  providerEventId   String
+  eventType         String
+  payload           Json
+  status            ChannelWebhookEventStatus @default(PENDING)
+  signatureVerified Boolean @default(false)
+  attempts          Int @default(0)
+  maxAttempts       Int @default(5)
+  nextAttemptAt     DateTime @default(now())
+  errorMessage      String?
+  receivedAt        DateTime @default(now())
+  processedAt       DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  channelAccount    SalesChannelAccount @relation(fields: [channelAccountId], references: [id])
+  @@unique([channelAccountId, providerEventId])
+  @@index([status, nextAttemptAt])
+  @@index([channelAccountId, receivedAt])
 }
 
 model ChannelSkuMapping {

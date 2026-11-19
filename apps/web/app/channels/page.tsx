@@ -115,7 +115,7 @@ export default function ChannelsPage() {
   }), [channels]);
 
   return <main className="channels-page">
-    <header className="channels-header"><div><p>OMNICHANNEL CONTROL</p><h1>Trung tâm kết nối kênh bán</h1><span>Quản lý cấu hình seller, ánh xạ SKU, webhook và trạng thái đồng bộ trên từng tài khoản.</span></div><nav><a href="/products">Sản phẩm</a><a href="/">← Tổng quan</a></nav></header>
+    <header className="channels-header"><div><p>OMNICHANNEL CONTROL</p><h1>Trung tâm kết nối kênh bán</h1><span>Quản lý cấu hình seller, ánh xạ SKU, webhook và trạng thái đồng bộ trên từng tài khoản.</span></div><nav><a href="/integrations">Nhật ký tích hợp</a><a href="/products">Sản phẩm</a><a href="/">← Tổng quan</a></nav></header>
     <section className="channel-metrics"><article><span>Kênh hoạt động</span><strong>{metrics.active}</strong></article><article><span>Kết nối sẵn sàng</span><strong>{metrics.ready}</strong></article><article><span>Ánh xạ SKU</span><strong>{metrics.mapped}</strong></article><article className={metrics.issues ? 'danger' : ''}><span>Thiếu cấu hình</span><strong>{metrics.issues}</strong></article></section>
     <div className="sync-note"><b>Chế độ tích hợp an toàn</b><span>Khóa truy cập được mã hóa. Trạng thái “Sẵn sàng” xác nhận đã đủ cấu hình; chỉ xác thực trực tiếp với nền tảng khi connector chính thức được bật.</span></div>
     {error && <div className="channel-error">{error}</div>}{notice && <div className="channel-notice">{notice}</div>}

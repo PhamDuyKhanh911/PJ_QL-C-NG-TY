@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { PrismaService } from '../prisma/prisma.service';
@@ -6,7 +6,15 @@ import { AssignConversationDto } from './dto/assign-conversation.dto';
 import { ListConversationsDto } from './dto/list-conversations.dto';
 import { SendMessageDto } from './dto/send-message.dto';
 import { CloseSaleDto } from './dto/close-sale.dto';
-import { BadRequestException } from '@nestjs/common';
+
+export type InboundChannelMessage = {
+  externalConversationId: string;
+  externalMessageId: string;
+  externalBuyerId: string;
+  customerName?: string;
+  content: string;
+  sentAt: string;
+};
 
 @Injectable()
 export class ConversationsService {
@@ -55,6 +63,63 @@ export class ConversationsService {
       });
       await tx.conversation.update({ where: { id: conversationId }, data: { status: 'REPLIED', assignedUserId: user.id, lastMessageAt: message.sentAt } });
       return { ...message, deliveryStatus: 'QUEUED' };
+    });
+  }
+
+  async ingestInbound(organizationId: string, channelAccountId: string, input: InboundChannelMessage) {
+    const channel = await this.prisma.salesChannelAccount.findFirst({
+      where: { id: channelAccountId, organizationId, active: true },
+      select: { id: true },
+    });
+    if (!channel) throw new NotFoundException('Seller nhận tin nhắn không hợp lệ hoặc đã tạm dừng');
+    const sentAt = new Date(input.sentAt);
+    if (Number.isNaN(sentAt.getTime())) throw new BadRequestException('Thời gian tin nhắn không hợp lệ');
+
+    return this.prisma.$transaction(async (tx) => {
+      let identity = await tx.customerIdentity.findUnique({
+        where: { channelAccountId_externalBuyerId: { channelAccountId, externalBuyerId: input.externalBuyerId } },
+      });
+      if (!identity) {
+        const customer = await tx.customer.create({
+          data: { organizationId, displayName: input.customerName?.trim() || `Khách ${input.externalBuyerId.slice(-8)}` },
+        });
+        identity = await tx.customerIdentity.create({
+          data: {
+            customerId: customer.id,
+            channelAccountId,
+            externalBuyerId: input.externalBuyerId,
+            displayName: input.customerName?.trim() || null,
+          },
+        });
+      }
+
+      const conversation = await tx.conversation.upsert({
+        where: { channelAccountId_externalId: { channelAccountId, externalId: input.externalConversationId } },
+        create: {
+          channelAccountId,
+          customerIdentityId: identity.id,
+          externalId: input.externalConversationId,
+          status: 'OPEN',
+          lastMessageAt: sentAt,
+        },
+        update: { status: 'OPEN', lastMessageAt: sentAt },
+      });
+      const existing = await tx.message.findUnique({
+        where: { conversationId_externalId: { conversationId: conversation.id, externalId: input.externalMessageId } },
+      });
+      if (existing) return { conversation, message: existing, duplicated: true };
+      const message = await tx.message.create({
+        data: {
+          conversationId: conversation.id,
+          externalId: input.externalMessageId,
+          direction: 'INBOUND',
+          type: 'TEXT',
+          content: input.content.trim(),
+          senderRole: 'CUSTOMER',
+          sentAt,
+        },
+      });
+      return { conversation, message, duplicated: false };
     });
   }
 
