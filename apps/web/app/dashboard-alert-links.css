@@ -1,0 +1,7 @@
+.alerts a.alert {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+.alerts a.alert:hover { filter: brightness(.98); }

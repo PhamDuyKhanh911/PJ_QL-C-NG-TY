@@ -3,10 +3,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import './dashboard.css';
+import './dashboard-alert-links.css';
 
 type Summary = {
   generatedAt: string;
-  stats: { todayRevenue: string; processingOrders: number; unrepliedConversations: number; lowStockSkus: number };
+  stats: { todayRevenue: string; processingOrders: number; unrepliedConversations: number; lowStockSkus: number; inventoryMismatches: number; unmappedChannelSkus: number };
   revenueByDay: Array<{ date: string; revenue: string }>;
   channelPerformance: Array<{ id: string; name: string; type: string; orders: number; revenue: string; issueRate: number; status: 'STABLE' | 'WATCH' }>;
   alerts: Array<{ type: string; severity: 'CRITICAL' | 'WARNING' | 'INFO'; title: string; detail: string }>;
@@ -15,6 +16,7 @@ type Summary = {
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api';
 const money = new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND', maximumFractionDigits: 0 });
 const number = new Intl.NumberFormat('vi-VN');
+const alertLink = (type: string) => ['INVENTORY_MISMATCH', 'UNMAPPED_CHANNEL_SKU'].includes(type) ? '/inventory/channel-reconciliation' : undefined;
 
 export default function Dashboard() {
   const router = useRouter();
@@ -56,7 +58,7 @@ export default function Dashboard() {
         <nav>
           <a className="active">Tổng quan</a>
           <a href="/orders">Đơn hàng</a><a href="/fulfillment">Xuất kho</a><a href="/after-sales">Hậu mãi</a><a href="/pos">Bán hàng POS</a><a href="/products">Sản phẩm</a><a href="/inventory">Kho hàng</a><a href="/inventory/transactions">Sổ giao dịch kho</a><a href="/inventory/quarantine">Kiểm định hàng hoàn</a>
-          <a href="/channels">Kênh bán hàng</a><a href="/integrations">Nhật ký tích hợp</a><a href="/inbox">Hộp thư chung {data && data.stats.unrepliedConversations > 0 && <b>{data.stats.unrepliedConversations}</b>}</a><a href="/assisted-sales">Chốt đơn qua chat</a><a href="/customers">Khách hàng</a>
+          <a href="/channels">Kênh bán hàng</a><a href="/inventory/channel-reconciliation">Đối chiếu tồn sàn {data && data.stats.inventoryMismatches + data.stats.unmappedChannelSkus > 0 && <b>{data.stats.inventoryMismatches + data.stats.unmappedChannelSkus}</b>}</a><a href="/integrations">Nhật ký tích hợp</a><a href="/inbox">Hộp thư chung {data && data.stats.unrepliedConversations > 0 && <b>{data.stats.unrepliedConversations}</b>}</a><a href="/assisted-sales">Chốt đơn qua chat</a><a href="/customers">Khách hàng</a>
           <a href="/purchasing">Mua hàng</a><a href="/reports">Báo cáo</a><a href="/reconciliation">Đối soát tiền về</a><a href="/receivables">Công nợ phải thu</a><a href="/reports/channels">Phát triển kênh</a><a href="/staff">Nhân viên & phân quyền</a><a>Cấu hình</a>
         </nav>
         <button className="user" onClick={logout}><i>AD</i><div>Quản trị viên<small>Đăng xuất</small></div></button>
@@ -70,7 +72,7 @@ export default function Dashboard() {
         {data && <>
           <section className="grid">
             <article className="panel performance"><div className="panel-title"><div><h3>Hiệu quả kinh doanh</h3><p>Doanh thu online và offline trong 7 ngày</p></div><strong>{money.format(totalRevenue)}</strong></div><div className="chart"><div className="axis"><span>{money.format(chartMax)}</span><span>{money.format(chartMax / 2)}</span><span>0</span></div>{data.revenueByDay.map((item) => <div className="bar-wrap" key={item.date} title={money.format(Number(item.revenue))}><div className="bar" style={{ height: `${Math.max(5, Number(item.revenue) / chartMax * 100)}%` }}></div><span>{new Date(`${item.date}T00:00:00`).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })}</span></div>)}</div></article>
-            <article className="panel alerts"><div className="panel-title"><div><h3>Cảnh báo cần xử lý</h3><p>Ưu tiên theo mức độ ảnh hưởng</p></div></div>{data.alerts.length ? data.alerts.map((alert) => <div className={`alert ${alert.severity === 'CRITICAL' ? 'critical' : alert.severity === 'WARNING' ? 'warning' : 'info'}`} key={alert.type}><b>{alert.title}</b><span>{alert.detail}</span></div>) : <div className="empty-state">Không có cảnh báo mới</div>}</article>
+            <article className="panel alerts"><div className="panel-title"><div><h3>Cảnh báo cần xử lý</h3><p>Ưu tiên theo mức độ ảnh hưởng</p></div></div>{data.alerts.length ? data.alerts.map((alert) => { const href = alertLink(alert.type); const content = <><b>{alert.title}</b><span>{alert.detail}</span></>; return href ? <a href={href} className={`alert ${alert.severity === 'CRITICAL' ? 'critical' : alert.severity === 'WARNING' ? 'warning' : 'info'}`} key={alert.type}>{content}</a> : <div className={`alert ${alert.severity === 'CRITICAL' ? 'critical' : alert.severity === 'WARNING' ? 'warning' : 'info'}`} key={alert.type}>{content}</div>; }) : <div className="empty-state">Không có cảnh báo mới</div>}</article>
           </section>
           <article className="panel channel-table"><div className="panel-title"><div><h3>Hiệu suất theo gian hàng</h3><p>30 ngày gần nhất</p></div></div><table><thead><tr><th>Gian hàng</th><th>Kênh</th><th>Đơn hàng</th><th>Doanh thu</th><th>Tỷ lệ hủy/hoàn</th><th>Trạng thái</th></tr></thead><tbody>{data.channelPerformance.map((channel) => <tr key={channel.id}><td><strong>{channel.name}</strong></td><td>{channel.type.replaceAll('_', ' ')}</td><td>{number.format(channel.orders)}</td><td>{money.format(Number(channel.revenue))}</td><td>{(channel.issueRate * 100).toLocaleString('vi-VN', { maximumFractionDigits: 1 })}%</td><td><span className={channel.status === 'STABLE' ? 'status ok' : 'status watch'}>{channel.status === 'STABLE' ? 'Ổn định' : 'Cần theo dõi'}</span></td></tr>)}</tbody></table></article>
         </>}

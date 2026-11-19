@@ -26,6 +26,11 @@ export class ChannelsController {
     return this.channels.inventoryReconciliation(user.organizationId, status);
   }
 
+  @Post('inventory-reconciliation/:id/resync') @RequirePermissions('channels.sync')
+  resyncInventoryReconciliation(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.channels.resyncInventoryReconciliation(user.organizationId, user.id, id);
+  }
+
   @Get(':id/connection') @RequirePermissions('channels.read')
   connection(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) { return this.channels.getConnection(user.organizationId, id); }
 

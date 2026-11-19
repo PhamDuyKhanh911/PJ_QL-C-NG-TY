@@ -24,7 +24,7 @@ export class ChannelsService {
         connection: true,
         skuMappings: { include: { variant: { include: { balances: true, product: { select: { active: true } } } } } },
         syncRuns: { orderBy: { startedAt: 'desc' }, take: 5 },
-        _count: { select: { orders: true, conversations: true } },
+        _count: { select: { orders: true, conversations: true, inventoryReconciliations: { where: { status: { in: ['MISMATCH', 'UNMAPPED'] } } } } },
       },
       orderBy: [{ type: 'asc' }, { name: 'asc' }],
     }), this.prisma.warehouse.findMany({ where: { branch: { organizationId } }, select: { id: true, code: true, name: true, branch: { select: { name: true } } }, orderBy: { name: 'asc' } })]);
@@ -39,6 +39,7 @@ export class ChannelsService {
       availableUnits: channel.skuMappings.reduce((total, mapping) => total + (mapping.variant.product.active ? mapping.variant.balances.reduce((sum, balance) => sum + Math.max(0, balance.onHand - balance.reserved - balance.quarantined - balance.safetyStock), 0) : 0), 0),
       orderCount: channel._count.orders,
       conversationCount: channel._count.conversations,
+      inventoryIssueCount: channel._count.inventoryReconciliations,
       recentSyncs: channel.syncRuns,
       warehouseOptions: warehouses,
       connection: this.connectionView(channel, channel.connection),
@@ -180,7 +181,7 @@ export class ChannelsService {
     const [rows, matched, mismatch, unmapped] = await Promise.all([
       this.prisma.channelInventoryReconciliation.findMany({
         where,
-        include: { channelAccount: { select: { id: true, code: true, name: true, type: true } } },
+        include: { channelAccount: { select: { id: true, code: true, name: true, type: true, connection: { select: { status: true, inventorySyncEnabled: true } } } } },
         orderBy: [{ status: 'desc' }, { updatedAt: 'desc' }],
         take: 500,
       }),
@@ -199,13 +200,59 @@ export class ChannelsService {
     return {
       rows: rows.map((row) => {
         const mapping = mappingByKey.get(`${row.channelAccountId}:${row.externalSkuId}`);
+        const { connection, ...channelAccount } = row.channelAccount;
         return {
           ...row,
+          channelAccount,
           variant: mapping ? { id: mapping.variant.id, sku: mapping.variant.sku, name: mapping.variant.name, product: mapping.variant.product } : null,
+          canResync: Boolean(mapping)
+            && row.status === 'MISMATCH'
+            && (channelAccount.type === ChannelType.SHOPEE || channelAccount.type === ChannelType.TIKTOK_SHOP)
+            && connection?.status === ChannelConnectionStatus.READY
+            && connection.inventorySyncEnabled,
         };
       }),
       summary: { total: matched + mismatch + unmapped, matched, mismatch, unmapped },
     };
+  }
+
+  async resyncInventoryReconciliation(organizationId: string, userId: string, reconciliationId: string) {
+    const reconciliation = await this.prisma.channelInventoryReconciliation.findFirst({
+      where: { id: reconciliationId, channelAccount: { organizationId } },
+      include: { channelAccount: { include: { connection: true } } },
+    });
+    if (!reconciliation) throw new NotFoundException('Không tìm thấy cảnh báo chênh lệch tồn kho');
+    if (reconciliation.status !== 'MISMATCH') throw new BadRequestException('Chỉ có thể đồng bộ lại SKU đang chênh lệch');
+    if (reconciliation.channelAccount.type !== ChannelType.SHOPEE && reconciliation.channelAccount.type !== ChannelType.TIKTOK_SHOP) throw new BadRequestException('Kênh này không hỗ trợ đẩy tồn kho qua API');
+    const mapping = await this.prisma.channelSkuMapping.findUnique({
+      where: { channelAccountId_externalSkuId: { channelAccountId: reconciliation.channelAccountId, externalSkuId: reconciliation.externalSkuId } },
+      include: { variant: { include: { product: { select: { active: true } }, balances: { include: { warehouse: true } } } } },
+    });
+    if (!mapping) throw new BadRequestException('SKU sàn chưa được ánh xạ với SKU nội bộ');
+    const tokenState = this.tokenState(reconciliation.channelAccount.type, reconciliation.channelAccount.connection);
+    if (reconciliation.channelAccount.connection?.status !== ChannelConnectionStatus.READY || tokenState !== 'VALID') {
+      throw new BadRequestException(`Chưa thể đồng bộ ${reconciliation.channelAccount.name}: token seller đang ở trạng thái ${tokenState}`);
+    }
+    const available = mapping.variant.product.active
+      ? mapping.variant.balances.reduce((sum, balance) => sum + Math.max(0, balance.onHand - balance.reserved - balance.quarantined - balance.safetyStock), 0)
+      : 0;
+    const snapshot = [{
+      sku: mapping.variant.sku,
+      externalProductId: mapping.externalProductId,
+      externalSkuId: mapping.externalSkuId,
+      available,
+      warehouses: mapping.variant.balances.map((balance) => ({ warehouse: balance.warehouse.code, onHand: balance.onHand, reserved: balance.reserved, quarantined: balance.quarantined, safetyStock: balance.safetyStock })),
+    }];
+    const run = await this.prisma.channelSyncRun.create({
+      data: { channelAccountId: reconciliation.channelAccountId, status: ChannelSyncStatus.RUNNING, direction: 'RECONCILE_INVENTORY', mappedSkuCount: 1, snapshot, triggeredById: userId },
+    });
+    const result = await this.inventoryPush.processRun(run.id);
+    const note = result.status === ChannelSyncStatus.SUCCEEDED
+      ? 'Đã gửi tồn ERP lên seller; trạng thái đối chiếu sẽ được xác nhận khi webhook mới quay về.'
+      : result.status === ChannelSyncStatus.RUNNING
+        ? 'Seller chưa nhận được cập nhật; hệ thống đã xếp lịch tự thử lại.'
+        : 'Không thể gửi tồn lên seller sau số lần thử cho phép; cần kiểm tra kết nối.';
+    return { run: result, expectedAvailable: available, note };
   }
 
   async processPending(organizationId: string, userId: string) {

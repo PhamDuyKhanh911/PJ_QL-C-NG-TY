@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import './channels.css';
+import './inventory-issues.css';
 
 type SyncRun = { id: string; status: string; direction: string; mappedSkuCount: number; processedCount: number; failedCount: number; startedAt: string };
 type Connection = {
@@ -39,7 +40,7 @@ type Connection = {
   oauthCallbackUrl?: string;
 };
 type WarehouseOption = { id: string; code: string; name: string; branch: { name: string } };
-type Channel = { id: string; code: string; name: string; type: string; active: boolean; mappedSkuCount: number; availableUnits: number; orderCount: number; conversationCount: number; recentSyncs: SyncRun[]; warehouseOptions: WarehouseOption[]; connection: Connection };
+type Channel = { id: string; code: string; name: string; type: string; active: boolean; mappedSkuCount: number; availableUnits: number; orderCount: number; conversationCount: number; inventoryIssueCount: number; recentSyncs: SyncRun[]; warehouseOptions: WarehouseOption[]; connection: Connection };
 type CurrentUser = { permissions: string[] };
 
 const api = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api';
@@ -179,18 +180,21 @@ export default function ChannelsPage() {
     ready: channels.filter((item) => item.connection.applicable && item.connection.ready).length,
     mapped: channels.reduce((sum, item) => sum + item.mappedSkuCount, 0),
     issues: channels.filter((item) => item.connection.applicable && !item.connection.ready).length,
+    inventoryIssues: channels.reduce((sum, item) => sum + item.inventoryIssueCount, 0),
   }), [channels]);
 
   return <main className="channels-page">
-    <header className="channels-header"><div><p>OMNICHANNEL CONTROL</p><h1>Trung tâm kết nối kênh bán</h1><span>Quản lý cấu hình seller, ánh xạ SKU, webhook và trạng thái đồng bộ trên từng tài khoản.</span></div><nav><a href="/integrations">Nhật ký tích hợp</a><a href="/products">Sản phẩm</a><a href="/">← Tổng quan</a></nav></header>
+    <header className="channels-header"><div><p>OMNICHANNEL CONTROL</p><h1>Trung tâm kết nối kênh bán</h1><span>Quản lý cấu hình seller, ánh xạ SKU, webhook và trạng thái đồng bộ trên từng tài khoản.</span></div><nav><a href="/inventory/channel-reconciliation">Đối chiếu tồn sàn</a><a href="/integrations">Nhật ký tích hợp</a><a href="/products">Sản phẩm</a><a href="/">← Tổng quan</a></nav></header>
     <section className="channel-metrics"><article><span>Kênh hoạt động</span><strong>{metrics.active}</strong></article><article><span>Kết nối sẵn sàng</span><strong>{metrics.ready}</strong></article><article><span>Ánh xạ SKU</span><strong>{metrics.mapped}</strong></article><article className={metrics.issues ? 'danger' : ''}><span>Thiếu cấu hình</span><strong>{metrics.issues}</strong></article></section>
     <div className="sync-note"><b>Token seller được giám sát tự động</b><span>Khóa truy cập được mã hóa; hệ thống làm mới token trước hạn 15 phút và khóa đồng bộ nếu token hết hạn hoặc bị thu hồi.</span></div>
+    {metrics.inventoryIssues > 0 && <a className="inventory-issue-banner" href="/inventory/channel-reconciliation"><b>{metrics.inventoryIssues} SKU cần xử lý tồn sàn</b><span>Xem seller bị chênh lệch hoặc chưa ghép SKU →</span></a>}
     {error && <div className="channel-error">{error}</div>}{notice && <div className="channel-notice">{notice}</div>}
     <section className="channel-grid">{channels.map((channel) => <article className="channel-card" key={channel.id}>
       <div className="channel-title"><i className={channel.type.toLowerCase()}>{channel.type === 'TIKTOK_SHOP' ? 'TT' : channel.type === 'FACEBOOK_MESSENGER' ? 'FB' : channel.type === 'OFFLINE_STORE' ? 'POS' : 'S'}</i><div><h2>{channel.name}</h2><span>{labels[channel.type] ?? channel.type} · {channel.code}</span></div><em className={channel.active ? 'active' : 'inactive'}>{channel.active ? 'Hoạt động' : 'Tạm dừng'}</em></div>
       <div className={`connection-state ${channel.connection.ready ? 'ready' : channel.connection.applicable ? 'incomplete' : 'internal'}`}><div><b>{channel.connection.applicable ? channel.connection.ready ? 'Đủ cấu hình kỹ thuật' : 'Chưa đủ cấu hình' : 'Kênh nội bộ'}</b><span>{channel.connection.applicable ? channel.connection.missingFields.length ? `Thiếu: ${channel.connection.missingFields.join(', ')}` : marketplace(channel.type) ? `${tokenLabels[channel.connection.tokenState]} · ${channel.connection.accessTokenExpiresAt ? new Date(channel.connection.accessTokenExpiresAt).toLocaleString('vi-VN') : 'chưa rõ thời hạn'}` : `${channel.connection.environment} · Khóa đã mã hóa` : 'Không yêu cầu API ngoài'}</span></div>{channel.connection.applicable && <strong>{channel.connection.ready ? 'READY' : 'SETUP'}</strong>}</div>
       <div className="channel-data"><div><span>SKU đã ánh xạ</span><b>{channel.mappedSkuCount}</b></div><div><span>Tồn khả dụng</span><b>{channel.availableUnits}</b></div><div><span>Đơn hàng</span><b>{channel.orderCount}</b></div><div><span>Hội thoại</span><b>{channel.conversationCount}</b></div></div>
       <div className="capabilities"><span className={channel.connection.orderSyncEnabled ? 'on' : ''}>Đơn hàng</span><span className={channel.connection.inventorySyncEnabled ? 'on' : ''}>Tồn kho</span><span className={channel.connection.chatSyncEnabled ? 'on' : ''}>Tin nhắn</span></div>
+      {channel.inventoryIssueCount > 0 && <a className="seller-inventory-warning" href="/inventory/channel-reconciliation"><b>{channel.inventoryIssueCount} SKU cần kiểm tra</b><span>Tồn sàn đang lệch hoặc chưa được ánh xạ</span></a>}
       {marketplace(channel.type) && <div className="sync-history"><h3>Đơn hàng tự động · mỗi 5 phút</h3><div><span className={`sync-status ${channel.connection.orderSyncStatus === 'FAILED' ? 'failed' : 'succeeded'}`}>{channel.connection.orderSyncStatus === 'FAILED' ? 'Có lỗi' : channel.connection.orderSyncStatus === 'RUNNING' ? 'Đang chạy' : 'Sẵn sàng'}</span><b>{channel.connection.lastOrderSyncAt ? new Date(channel.connection.lastOrderSyncAt).toLocaleString('vi-VN') : 'Chưa chạy'}</b></div>{channel.connection.orderSyncError && <p>{channel.connection.orderSyncError}</p>}</div>}
       <div className="sync-history"><h3>Lần đồng bộ gần nhất</h3>{channel.recentSyncs[0] ? <div><span className={`sync-status ${channel.recentSyncs[0].status.toLowerCase()}`}>{channel.recentSyncs[0].status === 'SUCCEEDED' ? 'Thành công' : channel.recentSyncs[0].status}</span><b>{channel.recentSyncs[0].processedCount}/{channel.recentSyncs[0].mappedSkuCount} SKU</b><time>{new Date(channel.recentSyncs[0].startedAt).toLocaleString('vi-VN')}</time></div> : <p>Chưa có lịch sử đồng bộ</p>}</div>
       <div className="channel-buttons">{canManage && channel.connection.applicable && <button className="configure" onClick={() => setConfiguring(channel)}>Cấu hình kết nối</button>}{canSync && marketplace(channel.type) && <button disabled={syncing === `orders:${channel.id}` || !channel.active || channel.connection.tokenState !== 'VALID' || !channel.connection.defaultWarehouseId} onClick={() => syncOrders(channel)}>{syncing === `orders:${channel.id}` ? 'Đang kéo đơn...' : 'Kéo đơn từ sàn'}</button>}{canSync && <button disabled={syncing === channel.id || !channel.active || (marketplace(channel.type) && channel.connection.tokenState !== 'VALID')} onClick={() => sync(channel)}>{syncing === channel.id ? 'Đang tạo snapshot...' : 'Đồng bộ tồn kho'}</button>}</div>

@@ -1,0 +1,29 @@
+.inventory-issue-banner,
+.seller-inventory-warning {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  text-decoration: none;
+  border-radius: 9px;
+}
+
+.inventory-issue-banner {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  background: #fff0f0;
+  border: 1px solid #f3cdcd;
+  color: #a83232;
+  font-size: 11px;
+}
+
+.seller-inventory-warning {
+  align-items: center;
+  margin: 0 0 13px;
+  padding: 10px 11px;
+  background: #fff6e7;
+  color: #9a5c00;
+  font-size: 9px;
+}
+
+.seller-inventory-warning b,
+.seller-inventory-warning span { display: block; }
