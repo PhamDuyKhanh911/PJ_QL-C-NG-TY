@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { ChannelConnection, ChannelConnectionStatus, ChannelSyncStatus, ChannelType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChannelCredentialCipherService } from './channel-credential-cipher.service';
+import { ChannelTokenService } from './channel-token.service';
 import { UpdateChannelConnectionDto } from './dto/update-channel-connection.dto';
 
 @Injectable()
@@ -9,6 +10,7 @@ export class ChannelsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly credentialCipher: ChannelCredentialCipherService,
+    private readonly tokens: ChannelTokenService,
   ) {}
 
   async list(organizationId: string) {
@@ -61,6 +63,9 @@ export class ChannelsService {
         clientSecretEncrypted: input.clientSecret ? this.credentialCipher.encrypt(input.clientSecret) : null,
         accessTokenEncrypted: input.accessToken ? this.credentialCipher.encrypt(input.accessToken) : null,
         refreshTokenEncrypted: input.refreshToken ? this.credentialCipher.encrypt(input.refreshToken) : null,
+        accessTokenExpiresAt: input.accessTokenExpiresAt ? new Date(input.accessTokenExpiresAt) : null,
+        refreshTokenExpiresAt: input.refreshTokenExpiresAt ? new Date(input.refreshTokenExpiresAt) : null,
+        grantedScopes: input.grantedScopes?.map((scope) => scope.trim()).filter(Boolean) ?? [],
         webhookSecretEncrypted: input.webhookSecret ? this.credentialCipher.encrypt(input.webhookSecret) : null,
         orderSyncEnabled: input.orderSyncEnabled ?? officialMarketplace,
         inventorySyncEnabled: input.inventorySyncEnabled ?? officialMarketplace,
@@ -75,6 +80,10 @@ export class ChannelsService {
         ...(input.clientSecret ? { clientSecretEncrypted: this.credentialCipher.encrypt(input.clientSecret) } : {}),
         ...(input.accessToken ? { accessTokenEncrypted: this.credentialCipher.encrypt(input.accessToken) } : {}),
         ...(input.refreshToken ? { refreshTokenEncrypted: this.credentialCipher.encrypt(input.refreshToken) } : {}),
+        ...(input.accessTokenExpiresAt !== undefined ? { accessTokenExpiresAt: new Date(input.accessTokenExpiresAt) } : {}),
+        ...(input.refreshTokenExpiresAt !== undefined ? { refreshTokenExpiresAt: new Date(input.refreshTokenExpiresAt) } : {}),
+        ...(input.grantedScopes !== undefined ? { grantedScopes: input.grantedScopes.map((scope) => scope.trim()).filter(Boolean) } : {}),
+        ...(input.accessToken || input.refreshToken ? { tokenRefreshStatus: 'IDLE', tokenRefreshLeaseUntil: null } : {}),
         ...(input.webhookSecret ? { webhookSecretEncrypted: this.credentialCipher.encrypt(input.webhookSecret) } : {}),
         ...(input.orderSyncEnabled !== undefined ? { orderSyncEnabled: input.orderSyncEnabled } : {}),
         ...(input.inventorySyncEnabled !== undefined ? { inventorySyncEnabled: input.inventorySyncEnabled } : {}),
@@ -83,12 +92,14 @@ export class ChannelsService {
       },
     });
     const missingFields = this.missingFields(channel.type, saved);
+    const tokenState = this.tokenState(channel.type, saved);
+    const invalidToken = officialMarketplace && ['EXPIRED', 'REAUTH_REQUIRED'].includes(tokenState);
     const checked = await this.prisma.channelConnection.update({
       where: { id: saved.id },
       data: {
-        status: missingFields.length ? ChannelConnectionStatus.INCOMPLETE : ChannelConnectionStatus.READY,
+        status: missingFields.length ? ChannelConnectionStatus.INCOMPLETE : invalidToken ? ChannelConnectionStatus.ERROR : ChannelConnectionStatus.READY,
         lastCheckedAt: new Date(),
-        lastError: missingFields.length ? `Thiếu: ${missingFields.join(', ')}` : null,
+        lastError: missingFields.length ? `Thiếu: ${missingFields.join(', ')}` : invalidToken ? 'Token seller đã hết hạn hoặc cần cấp quyền lại' : null,
       },
     });
     return this.connectionView(channel, checked);
@@ -100,20 +111,33 @@ export class ChannelsService {
     if (channel.type === ChannelType.OFFLINE_STORE) throw new BadRequestException('Kênh POS nội bộ không cần cấu hình API');
     if (!channel.connection) return this.connectionView(channel, null);
     const missingFields = this.missingFields(channel.type, channel.connection);
+    const tokenState = this.tokenState(channel.type, channel.connection);
+    const invalidToken = (channel.type === ChannelType.SHOPEE || channel.type === ChannelType.TIKTOK_SHOP) && ['EXPIRED', 'REAUTH_REQUIRED'].includes(tokenState);
     const checked = await this.prisma.channelConnection.update({
       where: { id: channel.connection.id },
       data: {
-        status: missingFields.length ? ChannelConnectionStatus.INCOMPLETE : ChannelConnectionStatus.READY,
+        status: missingFields.length ? ChannelConnectionStatus.INCOMPLETE : invalidToken ? ChannelConnectionStatus.ERROR : ChannelConnectionStatus.READY,
         lastCheckedAt: new Date(),
-        lastError: missingFields.length ? `Thiếu: ${missingFields.join(', ')}` : null,
+        lastError: missingFields.length ? `Thiếu: ${missingFields.join(', ')}` : invalidToken ? 'Token seller đã hết hạn hoặc cần cấp quyền lại' : null,
       },
     });
     return { ...this.connectionView(channel, checked), externalVerified: false, note: missingFields.length ? 'Cấu hình chưa đủ để khởi tạo connector.' : 'Cấu hình đã đủ; sẽ xác thực với API nền tảng khi bật connector chính thức.' };
   }
 
+  async refreshToken(organizationId: string, channelId: string) {
+    await this.tokens.refreshNow(organizationId, channelId);
+    return this.getConnection(organizationId, channelId);
+  }
+
   async syncInventory(organizationId: string, channelId: string, userId: string) {
-    const channel = await this.prisma.salesChannelAccount.findFirst({ where: { id: channelId, organizationId, active: true }, include: { skuMappings: { include: { variant: { include: { product: { select: { active: true } }, balances: { include: { warehouse: true } } } } } } } });
+    const channel = await this.prisma.salesChannelAccount.findFirst({ where: { id: channelId, organizationId, active: true }, include: { connection: true, skuMappings: { include: { variant: { include: { product: { select: { active: true } }, balances: { include: { warehouse: true } } } } } } } });
     if (!channel) throw new NotFoundException('Không tìm thấy kênh bán đang hoạt động');
+    if (channel.type === ChannelType.SHOPEE || channel.type === ChannelType.TIKTOK_SHOP) {
+      const tokenState = this.tokenState(channel.type, channel.connection);
+      if (channel.connection?.status !== ChannelConnectionStatus.READY || tokenState !== 'VALID') {
+        throw new BadRequestException(`Chưa thể đồng bộ ${channel.name}: token seller đang ở trạng thái ${tokenState}`);
+      }
+    }
     const snapshot = channel.skuMappings.map((mapping) => ({ sku: mapping.variant.sku, externalSkuId: mapping.externalSkuId, available: mapping.variant.product.active ? mapping.variant.balances.reduce((sum, balance) => sum + Math.max(0, balance.onHand - balance.reserved - balance.quarantined - balance.safetyStock), 0) : 0, warehouses: mapping.variant.balances.map((balance) => ({ warehouse: balance.warehouse.code, onHand: balance.onHand, reserved: balance.reserved, quarantined: balance.quarantined, safetyStock: balance.safetyStock })) }));
     return this.prisma.$transaction(async (tx) => {
       await tx.channelSyncRun.updateMany({ where: { channelAccountId: channel.id, status: ChannelSyncStatus.RUNNING }, data: { status: ChannelSyncStatus.SUCCEEDED, processedCount: snapshot.length, completedAt: new Date() } });
@@ -145,6 +169,8 @@ export class ChannelsService {
     if (!connection?.accountIdentifier) missing.push(type === ChannelType.SHOPEE ? 'Shop ID' : type === ChannelType.FACEBOOK_MESSENGER ? 'Page ID' : 'Shop/Cửa hàng ID');
     if (!connection?.clientSecretEncrypted) missing.push(type === ChannelType.SHOPEE ? 'Partner Key' : 'Client Secret');
     if (!connection?.accessTokenEncrypted) missing.push(type === ChannelType.FACEBOOK_MESSENGER ? 'Page Access Token' : 'Access Token');
+    if ((type === ChannelType.SHOPEE || type === ChannelType.TIKTOK_SHOP) && !connection?.refreshTokenEncrypted) missing.push('Refresh Token');
+    if ((type === ChannelType.SHOPEE || type === ChannelType.TIKTOK_SHOP) && !connection?.accessTokenExpiresAt) missing.push('Thời hạn Access Token');
     if (type === ChannelType.FACEBOOK_MESSENGER && !connection?.webhookSecretEncrypted) missing.push('Webhook Secret');
     return missing;
   }
@@ -156,7 +182,7 @@ export class ChannelsService {
     return {
       applicable,
       status: applicable ? connection?.status ?? ChannelConnectionStatus.INCOMPLETE : 'NOT_REQUIRED',
-      ready: applicable ? Boolean(connection) && missingFields.length === 0 : true,
+      ready: applicable ? Boolean(connection) && missingFields.length === 0 && connection?.status === ChannelConnectionStatus.READY : true,
       missingFields,
       environment: connection?.environment ?? 'PRODUCTION',
       clientId: connection?.clientId ?? '',
@@ -165,6 +191,12 @@ export class ChannelsService {
       hasClientSecret: Boolean(connection?.clientSecretEncrypted),
       hasAccessToken: Boolean(connection?.accessTokenEncrypted),
       hasRefreshToken: Boolean(connection?.refreshTokenEncrypted),
+      accessTokenExpiresAt: connection?.accessTokenExpiresAt ?? null,
+      refreshTokenExpiresAt: connection?.refreshTokenExpiresAt ?? null,
+      lastTokenRefreshAt: connection?.lastTokenRefreshAt ?? null,
+      tokenRefreshStatus: connection?.tokenRefreshStatus ?? 'IDLE',
+      tokenState: this.tokenState(channel.type, connection),
+      grantedScopes: connection?.grantedScopes ?? [],
       hasWebhookSecret: Boolean(connection?.webhookSecretEncrypted),
       orderSyncEnabled: connection?.orderSyncEnabled ?? false,
       inventorySyncEnabled: connection?.inventorySyncEnabled ?? false,
@@ -174,5 +206,16 @@ export class ChannelsService {
       webhookUrl: applicable ? `${apiPublicUrl}/api/channels/webhooks/${channel.id}` : null,
       updatedAt: connection?.updatedAt ?? null,
     };
+  }
+
+  private tokenState(type: ChannelType, connection: ChannelConnection | null) {
+    if (type !== ChannelType.SHOPEE && type !== ChannelType.TIKTOK_SHOP) return 'NOT_APPLICABLE';
+    if (!connection?.accessTokenEncrypted) return 'MISSING';
+    if (connection.refreshTokenExpiresAt && connection.refreshTokenExpiresAt <= new Date()) return 'REAUTH_REQUIRED';
+    if (!connection.accessTokenExpiresAt) return 'UNKNOWN';
+    const remaining = connection.accessTokenExpiresAt.getTime() - Date.now();
+    if (remaining <= 0) return 'EXPIRED';
+    if (remaining <= 15 * 60_000) return 'EXPIRING';
+    return 'VALID';
   }
 }

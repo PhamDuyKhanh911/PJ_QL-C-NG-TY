@@ -1,4 +1,4 @@
-import { IsBoolean, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsArray, IsBoolean, IsIn, IsISO8601, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class UpdateChannelConnectionDto {
   @IsOptional() @IsIn(['SANDBOX', 'PRODUCTION']) environment?: 'SANDBOX' | 'PRODUCTION';
@@ -8,6 +8,9 @@ export class UpdateChannelConnectionDto {
   @IsOptional() @IsString() @MinLength(8) clientSecret?: string;
   @IsOptional() @IsString() @MinLength(8) accessToken?: string;
   @IsOptional() @IsString() @MinLength(8) refreshToken?: string;
+  @IsOptional() @IsISO8601() accessTokenExpiresAt?: string;
+  @IsOptional() @IsISO8601() refreshTokenExpiresAt?: string;
+  @IsOptional() @IsArray() @IsString({ each: true }) grantedScopes?: string[];
   @IsOptional() @IsString() @MinLength(8) webhookSecret?: string;
   @IsOptional() @IsBoolean() orderSyncEnabled?: boolean;
   @IsOptional() @IsBoolean() inventorySyncEnabled?: boolean;

@@ -31,6 +31,11 @@ export class ChannelsController {
     return this.channels.checkConnection(user.organizationId, id);
   }
 
+  @Post(':id/connection/refresh-token') @RequirePermissions('channels.manage')
+  refreshToken(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.channels.refreshToken(user.organizationId, id);
+  }
+
   @Post('process-pending') @RequirePermissions('channels.sync')
   processPending(@CurrentUser() user: AuthenticatedUser) { return this.channels.processPending(user.organizationId, user.id); }
 

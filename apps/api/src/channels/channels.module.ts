@@ -7,10 +7,11 @@ import { ChannelIntegrationEventsController, ChannelWebhooksController } from '.
 import { ChannelsController } from './channels.controller';
 import { ChannelsService } from './channels.service';
 import { ChannelCredentialCipherService } from './channel-credential-cipher.service';
+import { ChannelTokenService } from './channel-token.service';
 
 @Module({
   imports: [AuthModule, SalesModule, ConversationsModule],
   controllers: [ChannelsController, ChannelWebhooksController, ChannelIntegrationEventsController],
-  providers: [ChannelsService, ChannelCredentialCipherService, ChannelWebhookService],
+  providers: [ChannelsService, ChannelCredentialCipherService, ChannelTokenService, ChannelWebhookService],
 })
 export class ChannelsModule {}

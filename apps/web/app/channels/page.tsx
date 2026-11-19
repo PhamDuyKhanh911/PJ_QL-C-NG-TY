@@ -17,6 +17,12 @@ type Connection = {
   hasClientSecret: boolean;
   hasAccessToken: boolean;
   hasRefreshToken: boolean;
+  accessTokenExpiresAt?: string;
+  refreshTokenExpiresAt?: string;
+  lastTokenRefreshAt?: string;
+  tokenRefreshStatus: string;
+  tokenState: 'NOT_APPLICABLE' | 'MISSING' | 'UNKNOWN' | 'VALID' | 'EXPIRING' | 'EXPIRED' | 'REAUTH_REQUIRED';
+  grantedScopes: string[];
   hasWebhookSecret: boolean;
   orderSyncEnabled: boolean;
   inventorySyncEnabled: boolean;
@@ -30,6 +36,9 @@ type CurrentUser = { permissions: string[] };
 
 const api = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api';
 const labels: Record<string, string> = { TIKTOK_SHOP: 'TikTok Shop', SHOPEE: 'Shopee', FACEBOOK_MESSENGER: 'Facebook Messenger', OFFLINE_STORE: 'Cửa hàng POS', WEBSITE: 'Website', WHOLESALE: 'Bán sỉ' };
+const tokenLabels: Record<string, string> = { VALID: 'Token hợp lệ', EXPIRING: 'Sắp hết hạn', EXPIRED: 'Đã hết hạn', REAUTH_REQUIRED: 'Cần cấp quyền lại', UNKNOWN: 'Chưa có hạn token', MISSING: 'Thiếu token', NOT_APPLICABLE: 'Không áp dụng' };
+const marketplace = (type: string) => ['TIKTOK_SHOP', 'SHOPEE'].includes(type);
+const datetimeLocal = (value?: string) => value ? new Date(new Date(value).getTime() - new Date(value).getTimezoneOffset() * 60_000).toISOString().slice(0, 16) : '';
 
 export default function ChannelsPage() {
   const router = useRouter();
@@ -84,6 +93,12 @@ export default function ChannelsPage() {
       const value = String(form.get(secret) ?? '').trim();
       if (value) body[secret] = value;
     }
+    for (const dateField of ['accessTokenExpiresAt', 'refreshTokenExpiresAt']) {
+      const value = String(form.get(dateField) ?? '').trim();
+      if (value) body[dateField] = new Date(value).toISOString();
+    }
+    const scopes = String(form.get('grantedScopes') ?? '').split(',').map((scope) => scope.trim()).filter(Boolean);
+    if (marketplace(channel.type)) body.grantedScopes = scopes;
     try {
       const response = await fetch(`${api}/channels/${channel.id}/connection`, { method: 'PUT', headers: { Authorization: `Bearer ${localStorage.getItem('erp_access_token')}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const payload = await response.json();
@@ -107,6 +122,20 @@ export default function ChannelsPage() {
     finally { setSaving(false); }
   }
 
+  async function refreshToken(channel: Channel) {
+    setSaving(true); setError(''); setNotice('');
+    try {
+      const response = await fetch(`${api}/channels/${channel.id}/connection/refresh-token`, { method: 'POST', headers: { Authorization: `Bearer ${localStorage.getItem('erp_access_token')}` } });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.message ?? 'Không thể làm mới token');
+      if (payload.tokenRefreshStatus !== 'SUCCEEDED') throw new Error(payload.lastError ?? 'Nền tảng từ chối làm mới token');
+      setNotice(`Đã làm mới token cho ${channel.name}.`);
+      setConfiguring(null);
+      await load();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Không thể làm mới token'); }
+    finally { setSaving(false); }
+  }
+
   const metrics = useMemo(() => ({
     active: channels.filter((item) => item.active).length,
     ready: channels.filter((item) => item.connection.applicable && item.connection.ready).length,
@@ -117,16 +146,39 @@ export default function ChannelsPage() {
   return <main className="channels-page">
     <header className="channels-header"><div><p>OMNICHANNEL CONTROL</p><h1>Trung tâm kết nối kênh bán</h1><span>Quản lý cấu hình seller, ánh xạ SKU, webhook và trạng thái đồng bộ trên từng tài khoản.</span></div><nav><a href="/integrations">Nhật ký tích hợp</a><a href="/products">Sản phẩm</a><a href="/">← Tổng quan</a></nav></header>
     <section className="channel-metrics"><article><span>Kênh hoạt động</span><strong>{metrics.active}</strong></article><article><span>Kết nối sẵn sàng</span><strong>{metrics.ready}</strong></article><article><span>Ánh xạ SKU</span><strong>{metrics.mapped}</strong></article><article className={metrics.issues ? 'danger' : ''}><span>Thiếu cấu hình</span><strong>{metrics.issues}</strong></article></section>
-    <div className="sync-note"><b>Chế độ tích hợp an toàn</b><span>Khóa truy cập được mã hóa. Trạng thái “Sẵn sàng” xác nhận đã đủ cấu hình; chỉ xác thực trực tiếp với nền tảng khi connector chính thức được bật.</span></div>
+    <div className="sync-note"><b>Token seller được giám sát tự động</b><span>Khóa truy cập được mã hóa; hệ thống làm mới token trước hạn 15 phút và khóa đồng bộ nếu token hết hạn hoặc bị thu hồi.</span></div>
     {error && <div className="channel-error">{error}</div>}{notice && <div className="channel-notice">{notice}</div>}
     <section className="channel-grid">{channels.map((channel) => <article className="channel-card" key={channel.id}>
       <div className="channel-title"><i className={channel.type.toLowerCase()}>{channel.type === 'TIKTOK_SHOP' ? 'TT' : channel.type === 'FACEBOOK_MESSENGER' ? 'FB' : channel.type === 'OFFLINE_STORE' ? 'POS' : 'S'}</i><div><h2>{channel.name}</h2><span>{labels[channel.type] ?? channel.type} · {channel.code}</span></div><em className={channel.active ? 'active' : 'inactive'}>{channel.active ? 'Hoạt động' : 'Tạm dừng'}</em></div>
-      <div className={`connection-state ${channel.connection.ready ? 'ready' : channel.connection.applicable ? 'incomplete' : 'internal'}`}><div><b>{channel.connection.applicable ? channel.connection.ready ? 'Đủ cấu hình kỹ thuật' : 'Chưa đủ cấu hình' : 'Kênh nội bộ'}</b><span>{channel.connection.applicable ? channel.connection.missingFields.length ? `Thiếu: ${channel.connection.missingFields.join(', ')}` : `${channel.connection.environment} · Khóa đã mã hóa` : 'Không yêu cầu API ngoài'}</span></div>{channel.connection.applicable && <strong>{channel.connection.ready ? 'READY' : 'SETUP'}</strong>}</div>
+      <div className={`connection-state ${channel.connection.ready ? 'ready' : channel.connection.applicable ? 'incomplete' : 'internal'}`}><div><b>{channel.connection.applicable ? channel.connection.ready ? 'Đủ cấu hình kỹ thuật' : 'Chưa đủ cấu hình' : 'Kênh nội bộ'}</b><span>{channel.connection.applicable ? channel.connection.missingFields.length ? `Thiếu: ${channel.connection.missingFields.join(', ')}` : marketplace(channel.type) ? `${tokenLabels[channel.connection.tokenState]} · ${channel.connection.accessTokenExpiresAt ? new Date(channel.connection.accessTokenExpiresAt).toLocaleString('vi-VN') : 'chưa rõ thời hạn'}` : `${channel.connection.environment} · Khóa đã mã hóa` : 'Không yêu cầu API ngoài'}</span></div>{channel.connection.applicable && <strong>{channel.connection.ready ? 'READY' : 'SETUP'}</strong>}</div>
       <div className="channel-data"><div><span>SKU đã ánh xạ</span><b>{channel.mappedSkuCount}</b></div><div><span>Tồn khả dụng</span><b>{channel.availableUnits}</b></div><div><span>Đơn hàng</span><b>{channel.orderCount}</b></div><div><span>Hội thoại</span><b>{channel.conversationCount}</b></div></div>
       <div className="capabilities"><span className={channel.connection.orderSyncEnabled ? 'on' : ''}>Đơn hàng</span><span className={channel.connection.inventorySyncEnabled ? 'on' : ''}>Tồn kho</span><span className={channel.connection.chatSyncEnabled ? 'on' : ''}>Tin nhắn</span></div>
       <div className="sync-history"><h3>Lần đồng bộ gần nhất</h3>{channel.recentSyncs[0] ? <div><span className={`sync-status ${channel.recentSyncs[0].status.toLowerCase()}`}>{channel.recentSyncs[0].status === 'SUCCEEDED' ? 'Thành công' : channel.recentSyncs[0].status}</span><b>{channel.recentSyncs[0].processedCount}/{channel.recentSyncs[0].mappedSkuCount} SKU</b><time>{new Date(channel.recentSyncs[0].startedAt).toLocaleString('vi-VN')}</time></div> : <p>Chưa có lịch sử đồng bộ</p>}</div>
-      <div className="channel-buttons">{canManage && channel.connection.applicable && <button className="configure" onClick={() => setConfiguring(channel)}>Cấu hình kết nối</button>}{canSync && <button disabled={syncing === channel.id || !channel.active} onClick={() => sync(channel)}>{syncing === channel.id ? 'Đang tạo snapshot...' : 'Đồng bộ tồn kho'}</button>}</div>
+      <div className="channel-buttons">{canManage && channel.connection.applicable && <button className="configure" onClick={() => setConfiguring(channel)}>Cấu hình kết nối</button>}{canSync && <button disabled={syncing === channel.id || !channel.active || (marketplace(channel.type) && channel.connection.tokenState !== 'VALID')} onClick={() => sync(channel)}>{syncing === channel.id ? 'Đang tạo snapshot...' : 'Đồng bộ tồn kho'}</button>}</div>
     </article>)}</section>
-    {configuring && <div className="connection-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) setConfiguring(null); }}><form className="connection-modal" onSubmit={(event) => saveConnection(event, configuring)}><div className="connection-heading"><div><p>{labels[configuring.type] ?? configuring.type}</p><h2>{configuring.name}</h2><span>Khóa đang lưu sẽ được giữ nguyên nếu ô bí mật để trống.</span></div><button type="button" onClick={() => setConfiguring(null)}>×</button></div><div className="connection-fields"><label>Môi trường<select name="environment" defaultValue={configuring.connection.environment}><option value="PRODUCTION">Production</option><option value="SANDBOX">Sandbox</option></select></label><label>{configuring.type === 'SHOPEE' ? 'Partner ID' : 'App / Client ID'}<input name="clientId" defaultValue={configuring.connection.clientId} required /></label><label>{configuring.type === 'SHOPEE' ? 'Shop ID' : configuring.type === 'FACEBOOK_MESSENGER' ? 'Page ID' : 'Shop / Cửa hàng ID'}<input name="accountIdentifier" defaultValue={configuring.connection.accountIdentifier} required /></label><label>API Base URL (tùy chọn)<input name="apiBaseUrl" defaultValue={configuring.connection.apiBaseUrl} /></label><label>{configuring.type === 'SHOPEE' ? 'Partner Key' : 'Client Secret'}<input name="clientSecret" type="password" placeholder={configuring.connection.hasClientSecret ? 'Đã lưu ••••••••' : 'Nhập khóa bí mật'} /></label><label>{configuring.type === 'FACEBOOK_MESSENGER' ? 'Page Access Token' : 'Access Token'}<input name="accessToken" type="password" placeholder={configuring.connection.hasAccessToken ? 'Đã lưu ••••••••' : 'Nhập access token'} /></label><label>Refresh Token (tùy chọn)<input name="refreshToken" type="password" placeholder={configuring.connection.hasRefreshToken ? 'Đã lưu ••••••••' : 'Nhập refresh token'} /></label><label>Webhook Secret {configuring.type !== 'FACEBOOK_MESSENGER' && '(tùy chọn)'}<input name="webhookSecret" type="password" placeholder={configuring.connection.hasWebhookSecret ? 'Đã lưu ••••••••' : 'Nhập webhook secret'} /></label></div><label className="webhook-url">Webhook URL dự kiến (dùng khi bật connector)<input value={configuring.connection.webhookUrl ?? ''} readOnly /></label><div className="sync-options"><label><input type="checkbox" name="orderSyncEnabled" defaultChecked={configuring.connection.orderSyncEnabled || ['TIKTOK_SHOP', 'SHOPEE'].includes(configuring.type)} /> Đồng bộ đơn hàng</label><label><input type="checkbox" name="inventorySyncEnabled" defaultChecked={configuring.connection.inventorySyncEnabled || ['TIKTOK_SHOP', 'SHOPEE'].includes(configuring.type)} /> Đồng bộ tồn kho</label><label><input type="checkbox" name="chatSyncEnabled" defaultChecked={configuring.connection.chatSyncEnabled || configuring.type === 'FACEBOOK_MESSENGER'} /> Đồng bộ tin nhắn</label></div><div className="modal-actions"><button type="button" className="check" disabled={saving} onClick={() => checkConnection(configuring)}>Kiểm tra độ đầy đủ</button><button disabled={saving}>{saving ? 'Đang lưu...' : 'Lưu cấu hình mã hóa'}</button></div></form></div>}
+    {configuring && <div className="connection-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) setConfiguring(null); }}>
+      <form className="connection-modal" onSubmit={(event) => saveConnection(event, configuring)}>
+        <div className="connection-heading"><div><p>{labels[configuring.type] ?? configuring.type}</p><h2>{configuring.name}</h2><span>Khóa đang lưu sẽ được giữ nguyên nếu ô bí mật để trống.</span></div><button type="button" onClick={() => setConfiguring(null)}>×</button></div>
+        {marketplace(configuring.type) && <div className={`token-state ${configuring.connection.tokenState.toLowerCase()}`}><b>{tokenLabels[configuring.connection.tokenState]}</b><span>{configuring.connection.lastTokenRefreshAt ? `Làm mới gần nhất ${new Date(configuring.connection.lastTokenRefreshAt).toLocaleString('vi-VN')}` : 'Chưa có lịch sử làm mới tự động'}</span></div>}
+        <div className="connection-fields">
+          <label>Môi trường<select name="environment" defaultValue={configuring.connection.environment}><option value="PRODUCTION">Production</option><option value="SANDBOX">Sandbox</option></select></label>
+          <label>{configuring.type === 'SHOPEE' ? 'Partner ID' : 'App / Client ID'}<input name="clientId" defaultValue={configuring.connection.clientId} required /></label>
+          <label>{configuring.type === 'SHOPEE' ? 'Shop ID' : configuring.type === 'FACEBOOK_MESSENGER' ? 'Page ID' : 'Shop / Cửa hàng ID'}<input name="accountIdentifier" defaultValue={configuring.connection.accountIdentifier} required /></label>
+          <label>API Base URL (tùy chọn)<input name="apiBaseUrl" defaultValue={configuring.connection.apiBaseUrl} /></label>
+          <label>{configuring.type === 'SHOPEE' ? 'Partner Key' : 'Client Secret'}<input name="clientSecret" type="password" placeholder={configuring.connection.hasClientSecret ? 'Đã lưu ••••••••' : 'Nhập khóa bí mật'} /></label>
+          <label>{configuring.type === 'FACEBOOK_MESSENGER' ? 'Page Access Token' : 'Access Token'}<input name="accessToken" type="password" placeholder={configuring.connection.hasAccessToken ? 'Đã lưu ••••••••' : 'Nhập access token'} /></label>
+          <label>Refresh Token {marketplace(configuring.type) ? '' : '(tùy chọn)'}<input name="refreshToken" type="password" placeholder={configuring.connection.hasRefreshToken ? 'Đã lưu ••••••••' : 'Nhập refresh token'} /></label>
+          <label>Webhook Secret {configuring.type !== 'FACEBOOK_MESSENGER' && '(tùy chọn)'}<input name="webhookSecret" type="password" placeholder={configuring.connection.hasWebhookSecret ? 'Đã lưu ••••••••' : 'Nhập webhook secret'} /></label>
+          {marketplace(configuring.type) && <>
+            <label>Access Token hết hạn lúc<input name="accessTokenExpiresAt" type="datetime-local" defaultValue={datetimeLocal(configuring.connection.accessTokenExpiresAt)} required /></label>
+            <label>Refresh Token hết hạn lúc (nếu biết)<input name="refreshTokenExpiresAt" type="datetime-local" defaultValue={datetimeLocal(configuring.connection.refreshTokenExpiresAt)} /></label>
+            <label className="scope-field">Quyền đã cấp, cách nhau bằng dấu phẩy<input name="grantedScopes" defaultValue={configuring.connection.grantedScopes.join(', ')} placeholder="order, product, inventory" /></label>
+          </>}
+        </div>
+        <label className="webhook-url">Webhook URL dự kiến (dùng khi bật connector)<input value={configuring.connection.webhookUrl ?? ''} readOnly /></label>
+        <div className="sync-options"><label><input type="checkbox" name="orderSyncEnabled" defaultChecked={configuring.connection.orderSyncEnabled || marketplace(configuring.type)} /> Đồng bộ đơn hàng</label><label><input type="checkbox" name="inventorySyncEnabled" defaultChecked={configuring.connection.inventorySyncEnabled || marketplace(configuring.type)} /> Đồng bộ tồn kho</label><label><input type="checkbox" name="chatSyncEnabled" defaultChecked={configuring.connection.chatSyncEnabled || configuring.type === 'FACEBOOK_MESSENGER'} /> Đồng bộ tin nhắn</label></div>
+        <div className="modal-actions">{marketplace(configuring.type) && configuring.connection.hasRefreshToken && <button type="button" className="refresh" disabled={saving} onClick={() => refreshToken(configuring)}>Làm mới token</button>}<button type="button" className="check" disabled={saving} onClick={() => checkConnection(configuring)}>Kiểm tra độ đầy đủ</button><button disabled={saving}>{saving ? 'Đang lưu...' : 'Lưu cấu hình mã hóa'}</button></div>
+      </form>
+    </div>}
   </main>;
 }

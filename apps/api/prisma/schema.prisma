@@ -283,6 +283,12 @@ model ChannelConnection {
   clientSecretEncrypted   String?
   accessTokenEncrypted    String?
   refreshTokenEncrypted   String?
+  accessTokenExpiresAt    DateTime?
+  refreshTokenExpiresAt   DateTime?
+  lastTokenRefreshAt      DateTime?
+  tokenRefreshStatus      String @default("IDLE")
+  tokenRefreshLeaseUntil  DateTime?
+  grantedScopes           String[] @default([])
   webhookSecretEncrypted  String?
   status                  ChannelConnectionStatus @default(INCOMPLETE)
   orderSyncEnabled        Boolean @default(true)
@@ -295,6 +301,7 @@ model ChannelConnection {
   updatedAt               DateTime @updatedAt
   channelAccount          SalesChannelAccount @relation(fields: [channelAccountId], references: [id])
   @@index([status, updatedAt])
+  @@index([tokenRefreshStatus, accessTokenExpiresAt])
 }
 
 model ChannelSyncRun {
