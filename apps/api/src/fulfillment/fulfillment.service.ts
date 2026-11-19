@@ -21,8 +21,8 @@ export class FulfillmentService {
     return orders.map((order) => ({ ...order, responsibleUser: order.responsibleUserId ? usersById.get(order.responsibleUserId) ?? null : null, fulfillmentEvents: order.fulfillmentEvents.map((event) => ({ ...event, performedBy: usersById.get(event.performedById) ?? null, responsibleUser: event.responsibleUserId ? usersById.get(event.responsibleUserId) ?? null : null })) }));
   }
 
-  async handlers(organizationId: string) {
-    return this.prisma.user.findMany({ where: { organizationId, active: true }, select: { id: true, displayName: true, email: true }, orderBy: { displayName: 'asc' } });
+  async handlers(organizationId: string, warehouseKeeperId: string) {
+    return this.prisma.user.findMany({ where: { organizationId, active: true, id: { not: warehouseKeeperId } }, select: { id: true, displayName: true, email: true }, orderBy: { displayName: 'asc' } });
   }
 
   async detail(organizationId: string, orderId: string) {
@@ -34,7 +34,65 @@ export class FulfillmentService {
     return { ...order, responsibleUser: order.responsibleUserId ? usersById.get(order.responsibleUserId) ?? null : null, fulfillmentEvents: order.fulfillmentEvents.map((event) => ({ ...event, performedBy: usersById.get(event.performedById) ?? null })) };
   }
 
+  async batchDetail(organizationId: string, batchCode: string) {
+    const events = await this.prisma.orderFulfillmentEvent.findMany({
+      where: { batchCode, order: { channelAccount: { organizationId } } },
+      include: {
+        order: {
+          include: {
+            channelAccount: true,
+            warehouse: { include: { branch: true } },
+            items: { include: { variant: { include: { product: true } } } },
+          },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (!events.length) throw new NotFoundException('Không tìm thấy lượt bàn giao');
+    const orderIds = new Set<string>();
+    const uniqueEvents = events.filter((event) => {
+      if (orderIds.has(event.orderId)) return false;
+      orderIds.add(event.orderId);
+      return true;
+    });
+    const first = uniqueEvents[0]!;
+    const userIds = [...new Set(uniqueEvents.flatMap((event) => [event.performedById, ...(event.responsibleUserId ? [event.responsibleUserId] : [])]))];
+    const users = await this.prisma.user.findMany({ where: { organizationId, id: { in: userIds } }, select: { id: true, displayName: true, email: true } });
+    const usersById = new Map(users.map((user) => [user.id, user]));
+    const totals = new Map<string, { variantId: string; sku: string; name: string; variantName: string; quantity: number }>();
+    for (const event of uniqueEvents) for (const item of event.order.items) {
+      const current = totals.get(item.variantId);
+      totals.set(item.variantId, {
+        variantId: item.variantId,
+        sku: item.variant.sku,
+        name: item.variant.product.name,
+        variantName: item.variant.name,
+        quantity: (current?.quantity ?? 0) + item.quantity,
+      });
+    }
+    return {
+      batchCode,
+      createdAt: first.createdAt,
+      channelAccount: first.order.channelAccount,
+      warehouse: first.order.warehouse,
+      warehouseKeeper: usersById.get(first.performedById) ?? null,
+      responsibleUser: first.responsibleUserId ? usersById.get(first.responsibleUserId) ?? null : null,
+      orderCount: uniqueEvents.length,
+      totalQuantity: [...totals.values()].reduce((sum, item) => sum + item.quantity, 0),
+      totals: [...totals.values()].sort((a, b) => a.sku.localeCompare(b.sku)),
+      orders: uniqueEvents.map((event) => ({
+        id: event.order.id,
+        orderNumber: event.order.orderNumber,
+        externalOrderId: event.order.externalOrderId,
+        items: event.order.items,
+      })),
+    };
+  }
+
   async batchDispatch(organizationId: string, warehouseKeeperId: string, input: BatchDispatchDto) {
+    const responsibleUser = await this.prisma.user.findFirst({ where: { id: input.responsibleUserId, organizationId, active: true }, select: { id: true, displayName: true, email: true } });
+    if (!responsibleUser) throw new BadRequestException('Nhân viên nhận đóng gói không hợp lệ hoặc đã ngừng hoạt động');
+    if (responsibleUser.id === warehouseKeeperId) throw new BadRequestException('Người nhận đóng gói phải khác thủ kho giao hàng');
     if (new Set(input.orderIds).size !== input.orderIds.length) throw new BadRequestException('Danh sách đơn bị trùng');
     const channel = await this.prisma.salesChannelAccount.findFirst({ where: { id: input.channelAccountId, organizationId, active: true } });
     if (!channel || channel.type === ChannelType.OFFLINE_STORE) throw new BadRequestException('Chỉ áp dụng xuất gộp cho gian hàng online');
@@ -45,7 +103,7 @@ export class FulfillmentService {
     const warehouseId = warehouseIds[0];
     const batchCode = `BATCH-${channel.code}-${Date.now().toString(36).toUpperCase()}`;
     return this.prisma.$transaction(async (tx) => {
-      const changed = await tx.salesOrder.updateMany({ where: { id: { in: input.orderIds }, channelAccountId: channel.id, status: OrderStatus.CONFIRMED }, data: { status: OrderStatus.SHIPPED } });
+      const changed = await tx.salesOrder.updateMany({ where: { id: { in: input.orderIds }, channelAccountId: channel.id, status: OrderStatus.CONFIRMED }, data: { status: OrderStatus.SHIPPED, responsibleUserId: responsibleUser.id, responsibilityAssignedAt: new Date() } });
       if (changed.count !== orders.length) throw new BadRequestException('Một hoặc nhiều đơn vừa được thủ kho khác xử lý');
       const totals = new Map<string, { quantity: number; sku: string }>();
       for (const order of orders) for (const item of order.items) {
@@ -61,9 +119,9 @@ export class FulfillmentService {
         if (issued !== 1) throw new BadRequestException(`SKU ${total.sku} không đủ tồn đã giữ để xuất gộp`);
         await tx.inventoryTransaction.create({ data: { warehouseId, variantId, type: InventoryTransactionType.SALE, quantity: -total.quantity, referenceType: 'FULFILLMENT_BATCH', referenceId: batchCode, reason: `Xuất gộp ${channel.name}: ${orders.length} đơn`, performedById: warehouseKeeperId } });
       }
-      await tx.orderFulfillmentEvent.createMany({ data: orders.map((order) => ({ orderId: order.id, action: 'WAREHOUSE_BATCH_DISPATCHED', fromStatus: OrderStatus.CONFIRMED, toStatus: OrderStatus.SHIPPED, performedById: warehouseKeeperId, carrierName: channel.name, trackingCode: order.externalOrderId ?? batchCode, note: `Lượt xuất ${batchCode}` })) });
+      await tx.orderFulfillmentEvent.createMany({ data: orders.map((order) => ({ orderId: order.id, action: 'WAREHOUSE_BATCH_DISPATCHED', fromStatus: OrderStatus.CONFIRMED, toStatus: OrderStatus.SHIPPED, performedById: warehouseKeeperId, responsibleUserId: responsibleUser.id, carrierName: channel.name, trackingCode: order.externalOrderId, batchCode, note: `Bàn giao cho ${responsibleUser.displayName} đóng gói; phiếu ${batchCode}` })) });
       await queueInventorySync(tx, [...totals.keys()], warehouseKeeperId, 'ONLINE_BATCH_DISPATCHED');
-      return { batchCode, channel: { id: channel.id, name: channel.name, type: channel.type }, orderCount: orders.length, skuTotals: [...totals.entries()].map(([variantId, item]) => ({ variantId, ...item })) };
+      return { batchCode, channel: { id: channel.id, name: channel.name, type: channel.type }, responsibleUser, orderCount: orders.length, skuTotals: [...totals.entries()].map(([variantId, item]) => ({ variantId, ...item })) };
     });
   }
 

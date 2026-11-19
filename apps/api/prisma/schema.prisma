@@ -436,11 +436,13 @@ model OrderFulfillmentEvent {
   responsibleUserId String?
   carrierName   String?
   trackingCode  String?
+  batchCode     String?
   note          String?
   createdAt     DateTime @default(now())
   order         SalesOrder @relation(fields: [orderId], references: [id])
   @@index([orderId, createdAt])
   @@index([performedById, createdAt])
+  @@index([batchCode])
 }
 
 model SalesOrderItem {
