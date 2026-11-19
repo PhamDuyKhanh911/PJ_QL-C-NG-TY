@@ -272,6 +272,7 @@ model SalesChannelAccount {
   connection     ChannelConnection?
   webhookEvents  ChannelWebhookEvent[]
   oauthSessions  ChannelOAuthSession[]
+  inventoryReconciliations ChannelInventoryReconciliation[]
   @@unique([organizationId, code])
 }
 
@@ -385,6 +386,26 @@ model ChannelSkuMapping {
   channelAccount   SalesChannelAccount @relation(fields: [channelAccountId], references: [id])
   variant          ProductVariant @relation(fields: [variantId], references: [id])
   @@unique([channelAccountId, externalSkuId])
+}
+
+model ChannelInventoryReconciliation {
+  id                String @id @default(cuid())
+  channelAccountId  String
+  externalProductId String?
+  externalSkuId     String
+  reportedAvailable Int
+  expectedAvailable Int?
+  difference        Int?
+  status            String @default("UNMAPPED")
+  observedAt        DateTime
+  sourceEventId     String
+  source            String?
+  details           Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  channelAccount    SalesChannelAccount @relation(fields: [channelAccountId], references: [id], onDelete: Cascade)
+  @@unique([channelAccountId, externalSkuId])
+  @@index([channelAccountId, status, updatedAt])
 }
 
 model Customer {

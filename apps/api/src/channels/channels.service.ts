@@ -172,6 +172,42 @@ export class ChannelsService {
     return { pending, stale, failed, succeededToday };
   }
 
+  async inventoryReconciliation(organizationId: string, requestedStatus?: string) {
+    const allowedStatuses = ['MATCHED', 'MISMATCH', 'UNMAPPED'];
+    const status = requestedStatus?.toUpperCase();
+    const baseWhere = { channelAccount: { organizationId } };
+    const where = status && allowedStatuses.includes(status) ? { ...baseWhere, status } : baseWhere;
+    const [rows, matched, mismatch, unmapped] = await Promise.all([
+      this.prisma.channelInventoryReconciliation.findMany({
+        where,
+        include: { channelAccount: { select: { id: true, code: true, name: true, type: true } } },
+        orderBy: [{ status: 'desc' }, { updatedAt: 'desc' }],
+        take: 500,
+      }),
+      this.prisma.channelInventoryReconciliation.count({ where: { ...baseWhere, status: 'MATCHED' } }),
+      this.prisma.channelInventoryReconciliation.count({ where: { ...baseWhere, status: 'MISMATCH' } }),
+      this.prisma.channelInventoryReconciliation.count({ where: { ...baseWhere, status: 'UNMAPPED' } }),
+    ]);
+    const pairs = rows.map((row) => ({ channelAccountId: row.channelAccountId, externalSkuId: row.externalSkuId }));
+    const mappings = pairs.length
+      ? await this.prisma.channelSkuMapping.findMany({
+          where: { OR: pairs },
+          include: { variant: { include: { product: { select: { id: true, name: true } } } } },
+        })
+      : [];
+    const mappingByKey = new Map(mappings.map((mapping) => [`${mapping.channelAccountId}:${mapping.externalSkuId}`, mapping]));
+    return {
+      rows: rows.map((row) => {
+        const mapping = mappingByKey.get(`${row.channelAccountId}:${row.externalSkuId}`);
+        return {
+          ...row,
+          variant: mapping ? { id: mapping.variant.id, sku: mapping.variant.sku, name: mapping.variant.name, product: mapping.variant.product } : null,
+        };
+      }),
+      summary: { total: matched + mismatch + unmapped, matched, mismatch, unmapped },
+    };
+  }
+
   async processPending(organizationId: string, userId: string) {
     void userId;
     return this.inventoryPush.processPending(organizationId, 50);

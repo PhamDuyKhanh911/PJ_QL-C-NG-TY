@@ -21,6 +21,11 @@ export class ChannelsController {
   @Get('sync-summary') @RequirePermissions('channels.read')
   summary(@CurrentUser() user: AuthenticatedUser) { return this.channels.syncSummary(user.organizationId); }
 
+  @Get('inventory-reconciliation') @RequirePermissions('inventory.read')
+  inventoryReconciliation(@CurrentUser() user: AuthenticatedUser, @Query('status') status?: string) {
+    return this.channels.inventoryReconciliation(user.organizationId, status);
+  }
+
   @Get(':id/connection') @RequirePermissions('channels.read')
   connection(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) { return this.channels.getConnection(user.organizationId, id); }
 

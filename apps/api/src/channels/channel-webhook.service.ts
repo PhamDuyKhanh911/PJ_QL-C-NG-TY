@@ -219,6 +219,9 @@ export class ChannelWebhookService implements OnModuleInit, OnModuleDestroy {
     const data = this.isObject(payload.data) ? payload.data : payload;
     const type = event.eventType.toUpperCase().replaceAll('.', '_').replaceAll('-', '_');
     if (['PING', 'WEBHOOK_TEST', 'CONNECTION_TEST'].includes(type)) return { ignored: false, note: 'Webhook test hợp lệ' };
+    if (['71', 'INVENTORY_CHANGED', 'INVENTORY_CHANGED_BY_SHOP', 'STOCK_UPDATED', 'ITEM_STOCK_UPDATED', 'SKU_STOCK_UPDATED'].includes(type)) {
+      return this.reconcileInventory(event, data);
+    }
     if (['ORDER_CREATED', 'ORDER_UPSERT', 'ORDER_CONFIRMED'].includes(type)) {
       const input = this.marketplaceOrder(event.channelAccountId, data);
       await this.sales.syncMarketplace(event.channelAccount.organizationId, `SYSTEM_WEBHOOK:${event.channelAccountId}`, input);
@@ -254,6 +257,81 @@ export class ChannelWebhookService implements OnModuleInit, OnModuleDestroy {
       return { ignored: false, note: null };
     }
     return { ignored: true, note: `Chưa có adapter cho loại sự kiện ${event.eventType}` };
+  }
+
+  private async reconcileInventory(
+    event: Prisma.ChannelWebhookEventGetPayload<{ include: { channelAccount: { include: { connection: true } } } }>,
+    data: JsonObject,
+  ) {
+    const observations = this.inventoryObservations(data);
+    if (!observations.length) throw new BadRequestException('Sự kiện tồn kho không chứa SKU và số lượng hợp lệ');
+    const mappings = await this.prisma.channelSkuMapping.findMany({
+      where: {
+        channelAccountId: event.channelAccountId,
+        externalSkuId: { in: observations.map((item) => item.externalSkuId) },
+      },
+      include: { variant: { include: { product: true, balances: true } } },
+    });
+    const mappingBySku = new Map(mappings.map((mapping) => [mapping.externalSkuId, mapping]));
+    let matched = 0;
+    let mismatch = 0;
+    let unmapped = 0;
+    let stale = 0;
+    for (const observation of observations) {
+      const current = await this.prisma.channelInventoryReconciliation.findUnique({
+        where: { channelAccountId_externalSkuId: { channelAccountId: event.channelAccountId, externalSkuId: observation.externalSkuId } },
+        select: { observedAt: true },
+      });
+      if (current && current.observedAt > observation.observedAt) {
+        stale += 1;
+        continue;
+      }
+      const mapping = mappingBySku.get(observation.externalSkuId);
+      const expectedAvailable = mapping
+        ? (mapping.variant.product.active
+            ? mapping.variant.balances.reduce(
+                (sum, balance) => sum + Math.max(0, balance.onHand - balance.reserved - balance.quarantined - balance.safetyStock),
+                0,
+              )
+            : 0)
+        : null;
+      const difference = expectedAvailable === null ? null : observation.reportedAvailable - expectedAvailable;
+      const status = expectedAvailable === null ? 'UNMAPPED' : difference === 0 ? 'MATCHED' : 'MISMATCH';
+      if (status === 'MATCHED') matched += 1;
+      else if (status === 'MISMATCH') mismatch += 1;
+      else unmapped += 1;
+      await this.prisma.channelInventoryReconciliation.upsert({
+        where: { channelAccountId_externalSkuId: { channelAccountId: event.channelAccountId, externalSkuId: observation.externalSkuId } },
+        create: {
+          channelAccountId: event.channelAccountId,
+          externalProductId: observation.externalProductId,
+          externalSkuId: observation.externalSkuId,
+          reportedAvailable: observation.reportedAvailable,
+          expectedAvailable,
+          difference,
+          status,
+          observedAt: observation.observedAt,
+          sourceEventId: event.providerEventId,
+          source: observation.source,
+          details: observation.details as Prisma.InputJsonObject,
+        },
+        update: {
+          externalProductId: observation.externalProductId,
+          reportedAvailable: observation.reportedAvailable,
+          expectedAvailable,
+          difference,
+          status,
+          observedAt: observation.observedAt,
+          sourceEventId: event.providerEventId,
+          source: observation.source,
+          details: observation.details as Prisma.InputJsonObject,
+        },
+      });
+    }
+    return {
+      ignored: false,
+      note: `Đối chiếu tồn kho: ${matched} khớp, ${mismatch} chênh lệch, ${unmapped} SKU chưa ghép, ${stale} sự kiện cũ được bỏ qua. Không thay đổi tồn ERP.`,
+    };
   }
 
   private marketplaceOrder(channelAccountId: string, data: JsonObject): SyncMarketplaceOrderDto {
@@ -321,6 +399,51 @@ export class ChannelWebhookService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  private inventoryObservations(data: JsonObject) {
+    const candidates: JsonObject[] = [data];
+    for (const key of ['skus', 'items', 'inventory_list', 'stock_list']) {
+      const value = data[key];
+      if (Array.isArray(value)) candidates.push(...value.filter((item): item is JsonObject => this.isObject(item)));
+    }
+    if (this.isObject(data.sku)) candidates.push(data.sku);
+    const observations = candidates.flatMap((item) => {
+      const detail = this.isObject(item.quantity_snapshot_after_change) ? item.quantity_snapshot_after_change : undefined;
+      const rawChangeDetail = item.change_detail ?? data.change_detail;
+      const changeDetail = this.isObject(rawChangeDetail)
+        ? rawChangeDetail
+        : Array.isArray(rawChangeDetail)
+          ? rawChangeDetail.find((value): value is JsonObject => this.isObject(value))
+          : undefined;
+      const externalSkuId = this.identifier(item.externalSkuId)
+        || this.identifier(item.sku_id)
+        || this.identifier(item.model_id)
+        || this.identifier(detail?.sku_id);
+      const reportedAvailable = this.firstNumber([
+        detail?.available_quantity,
+        detail?.available,
+        detail?.total_available_quantity,
+        detail?.seller_available_quantity,
+        item.reportedAvailable,
+        item.available_quantity,
+        item.available,
+        item.normal_stock,
+        item.current_stock,
+        item.stock,
+      ]);
+      if (!externalSkuId || reportedAvailable === undefined || !Number.isInteger(reportedAvailable) || reportedAvailable < 0) return [];
+      const occurredAt = item.occur_time ?? item.occurred_at ?? data.occur_time ?? data.timestamp;
+      return [{
+        externalProductId: this.identifier(item.externalProductId) || this.identifier(item.product_id) || this.identifier(item.item_id) || undefined,
+        externalSkuId,
+        reportedAvailable,
+        observedAt: this.webhookDate(occurredAt),
+        source: this.optionalString(changeDetail?.trigger_source) || this.optionalString(changeDetail?.source),
+        details: item,
+      }];
+    });
+    return Array.from(new Map(observations.map((item) => [item.externalSkuId, item])).values());
+  }
+
   private async saveEvent(channelAccountId: string, input: NormalizedWebhookEvent) {
     try {
       const event = await this.prisma.channelWebhookEvent.create({
@@ -345,9 +468,16 @@ export class ChannelWebhookService implements OnModuleInit, OnModuleDestroy {
   }
 
   private genericEvent(body: JsonObject, rawBody: Buffer, headerEventId?: string): NormalizedWebhookEvent {
+    const data = this.isObject(body.data) ? body.data : undefined;
     return {
       eventType: this.eventType(body),
-      providerEventId: headerEventId?.trim() || this.stringValue(body.eventId) || this.stringValue(body.id) || createHash('sha256').update(rawBody).digest('hex'),
+      providerEventId: headerEventId?.trim()
+        || this.identifier(body.event_id)
+        || this.identifier(data?.event_id)
+        || this.identifier(body.tts_notification_id)
+        || this.identifier(body.eventId)
+        || this.identifier(body.id)
+        || createHash('sha256').update(rawBody).digest('hex'),
       payload: body,
     };
   }
@@ -452,7 +582,36 @@ export class ChannelWebhookService implements OnModuleInit, OnModuleDestroy {
   }
 
   private eventType(body: JsonObject) {
-    return this.stringValue(body.eventType) || this.stringValue(body.type) || this.stringValue(body.event) || 'UNKNOWN';
+    return this.identifier(body.event_type) || this.identifier(body.eventType) || this.identifier(body.type) || this.identifier(body.event) || 'UNKNOWN';
+  }
+
+  private identifier(value: unknown) {
+    if (typeof value === 'string') return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+    if (typeof value === 'bigint') return String(value);
+    return '';
+  }
+
+  private firstNumber(values: unknown[]) {
+    for (const value of values) {
+      const normalized = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : Number.NaN;
+      if (Number.isFinite(normalized)) return normalized;
+    }
+    return undefined;
+  }
+
+  private webhookDate(value: unknown) {
+    if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+    if (typeof value === 'number' || (typeof value === 'string' && value.trim())) {
+      const numeric = Number(value);
+      if (Number.isFinite(numeric) && numeric > 0) {
+        const date = new Date(numeric < 10_000_000_000 ? numeric * 1_000 : numeric);
+        if (!Number.isNaN(date.getTime())) return date;
+      }
+      const date = new Date(String(value));
+      if (!Number.isNaN(date.getTime())) return date;
+    }
+    return new Date();
   }
 
   private stringValue(value: unknown) {
