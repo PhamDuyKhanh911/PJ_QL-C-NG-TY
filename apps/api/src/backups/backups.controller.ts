@@ -18,7 +18,7 @@ export class BackupsController {
   list() { return this.backups.list(); }
 
   @Post()
-  create(@CurrentUser() user: AuthenticatedUser) { return this.backups.create(user.id); }
+  create(@CurrentUser() user: AuthenticatedUser) { return this.backups.create(user.organizationId, user.id); }
 
   @Post(':fileName/verify')
   verify(@Param('fileName') fileName: string) { return this.backups.verify(fileName); }

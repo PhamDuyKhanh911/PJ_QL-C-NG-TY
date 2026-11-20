@@ -527,6 +527,22 @@ model AfterSaleRequest {
   order            SalesOrder @relation(fields: [orderId], references: [id])
 }
 
+model AuditEvent {
+  id             String   @id @default(cuid())
+  organizationId String
+  actorId        String?
+  category       String
+  action         String
+  entityType     String
+  entityId       String?
+  summary        String
+  metadata       Json?
+  createdAt      DateTime @default(now())
+  @@index([organizationId, createdAt])
+  @@index([organizationId, category, createdAt])
+  @@index([actorId, createdAt])
+}
+
 model Conversation {
   id                 String @id @default(cuid())
   channelAccountId   String

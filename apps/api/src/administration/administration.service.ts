@@ -23,49 +23,57 @@ export class AdministrationService {
     return this.prisma.role.findMany({ where: { organizationId }, include: { _count: { select: { assignments: true } } }, orderBy: { name: 'asc' } });
   }
 
-  async createUser(organizationId: string, input: CreateUserDto) {
+  async createUser(organizationId: string, actorId: string, input: CreateUserDto) {
     try {
-      return await this.prisma.user.create({
+      const created = await this.prisma.user.create({
         data: { organizationId, email: input.email.toLowerCase(), displayName: input.displayName, passwordHash: await this.passwords.hash(input.password) },
         select: { id: true, email: true, displayName: true, active: true },
       });
+      await this.prisma.auditEvent.create({ data: { organizationId, actorId, category: 'ADMINISTRATION', action: 'USER_CREATED', entityType: 'USER', entityId: created.id, summary: `Tạo tài khoản nhân viên ${created.displayName}`, metadata: { email: created.email } } });
+      return created;
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new ConflictException('Email đã tồn tại trong doanh nghiệp');
       throw error;
     }
   }
 
-  async createRole(organizationId: string, input: CreateRoleDto) {
+  async createRole(organizationId: string, actorId: string, input: CreateRoleDto) {
     const known = new Set<string>(PERMISSION_CATALOG.map((item) => item.code));
     const unknown = input.permissions.filter((permission) => permission !== '*' && !known.has(permission));
     if (unknown.length) throw new BadRequestException(`Quyền không hợp lệ: ${unknown.join(', ')}`);
     try {
-      return await this.prisma.role.create({ data: { organizationId, code: input.code.toUpperCase(), name: input.name, permissions: input.permissions } });
+      const created = await this.prisma.role.create({ data: { organizationId, code: input.code.toUpperCase(), name: input.name, permissions: input.permissions } });
+      await this.prisma.auditEvent.create({ data: { organizationId, actorId, category: 'ADMINISTRATION', action: 'ROLE_CREATED', entityType: 'ROLE', entityId: created.id, summary: `Tạo vai trò ${created.name}`, metadata: { code: created.code, permissionCount: input.permissions.length } } });
+      return created;
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new ConflictException('Mã vai trò đã tồn tại');
       throw error;
     }
   }
 
-  async assignRole(organizationId: string, userId: string, input: AssignRoleDto) {
+  async assignRole(organizationId: string, actorId: string, userId: string, input: AssignRoleDto) {
     const [user, role] = await Promise.all([
       this.prisma.user.findFirst({ where: { id: userId, organizationId } }),
       this.prisma.role.findFirst({ where: { id: input.roleId, organizationId } }),
     ]);
     if (!user || !role) throw new NotFoundException('Không tìm thấy nhân viên hoặc vai trò');
     await this.validateScope(organizationId, input.scopeType, input.scopeId);
-    return this.prisma.userRoleAssignment.upsert({
+    const assignment = await this.prisma.userRoleAssignment.upsert({
       where: { userId_roleId_scopeType_scopeId: { userId, roleId: role.id, scopeType: input.scopeType, scopeId: input.scopeId } },
       update: {},
       create: { userId, roleId: role.id, scopeType: input.scopeType, scopeId: input.scopeId },
       include: { role: true },
     });
+    await this.prisma.auditEvent.create({ data: { organizationId, actorId, category: 'ADMINISTRATION', action: 'ROLE_ASSIGNED', entityType: 'USER', entityId: user.id, summary: `Gán vai trò ${role.name} cho ${user.displayName}`, metadata: { scopeType: input.scopeType, scopeId: input.scopeId } } });
+    return assignment;
   }
 
   async setActive(organizationId: string, userId: string, active: boolean, currentUserId: string) {
     if (userId === currentUserId && !active) throw new BadRequestException('Không thể tự vô hiệu hóa tài khoản đang đăng nhập');
     const result = await this.prisma.user.updateMany({ where: { id: userId, organizationId }, data: { active } });
     if (!result.count) throw new NotFoundException('Không tìm thấy nhân viên');
+    const target = await this.prisma.user.findUnique({ where: { id: userId }, select: { displayName: true, email: true } });
+    await this.prisma.auditEvent.create({ data: { organizationId, actorId: currentUserId, category: 'ADMINISTRATION', action: active ? 'USER_ACTIVATED' : 'USER_DEACTIVATED', entityType: 'USER', entityId: userId, summary: `${active ? 'Mở khóa' : 'Khóa'} tài khoản ${target?.displayName ?? target?.email ?? userId}` } });
     return { id: userId, active };
   }
 

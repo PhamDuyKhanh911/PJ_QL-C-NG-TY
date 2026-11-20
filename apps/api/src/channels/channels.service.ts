@@ -116,6 +116,7 @@ export class ChannelsService {
         lastError: missingFields.length ? `Thiếu: ${missingFields.join(', ')}` : invalidToken ? 'Token seller đã hết hạn hoặc cần cấp quyền lại' : null,
       },
     });
+    await this.prisma.auditEvent.create({ data: { organizationId, actorId: userId, category: 'CHANNEL', action: 'CHANNEL_CONNECTION_UPDATED', entityType: 'SALES_CHANNEL_ACCOUNT', entityId: channel.id, summary: `Cập nhật cấu hình kết nối ${channel.name}`, metadata: { channelCode: channel.code, environment: checked.environment, orderSyncEnabled: checked.orderSyncEnabled, inventorySyncEnabled: checked.inventorySyncEnabled, chatSyncEnabled: checked.chatSyncEnabled } } });
     return this.connectionView(channel, checked);
   }
 

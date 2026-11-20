@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { createReadStream, existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
+import { PrismaService } from '../prisma/prisma.service';
 
 type BackupManifest = {
   fileName: string;
@@ -24,6 +25,7 @@ const backupNamePattern = /^enterprise-\d{8}-\d{6}-[a-f0-9]{6}\.dump$/;
 @Injectable()
 export class BackupsService {
   private creating = false;
+  constructor(private readonly prisma: PrismaService) {}
 
   async list() {
     const directory = this.backupDirectory();
@@ -40,7 +42,7 @@ export class BackupsService {
     return manifests.filter((item): item is BackupManifest => item !== null).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
-  async create(requestedByUserId: string) {
+  async create(organizationId: string, requestedByUserId: string) {
     if (this.creating) throw new ConflictException('Một bản sao lưu khác đang được tạo. Vui lòng đợi hoàn tất.');
     this.creating = true;
     const directory = this.backupDirectory();
@@ -73,6 +75,7 @@ export class BackupsService {
         toolVersion: await this.toolVersion(pgDump),
       };
       await this.writeManifest(manifest);
+      await this.prisma.auditEvent.create({ data: { organizationId, actorId: requestedByUserId, category: 'BACKUP', action: 'BACKUP_CREATED', entityType: 'DATABASE_BACKUP', entityId: fileName, summary: 'Tạo và kiểm tra bản sao lưu toàn hệ thống', metadata: { fileName, sizeBytes: file.size, sha256: manifest.sha256 } } });
       return manifest;
     } catch (error) {
       await unlink(partialPath).catch(() => undefined);
