@@ -2,6 +2,7 @@ import { Body, Controller, Get, Headers, HttpCode, Param, Post, Query, Req, UseG
 import type { Request } from 'express';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { assertOrganizationScope, resolveDataScope } from '../auth/data-scope';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../auth/permissions.decorator';
 import { PermissionsGuard } from '../auth/permissions.guard';
@@ -47,18 +48,19 @@ export class ChannelIntegrationEventsController {
   @Get()
   @RequirePermissions('channels.read')
   list(@CurrentUser() user: AuthenticatedUser, @Query() query: ListChannelWebhookEventsDto) {
-    return this.webhooks.list(user.organizationId, query);
+    return this.webhooks.list(user.organizationId, query, resolveDataScope(user, 'channels.read'));
   }
 
   @Post('process-pending')
   @RequirePermissions('channels.manage')
   processPending(@CurrentUser() user: AuthenticatedUser) {
+    assertOrganizationScope(resolveDataScope(user, 'channels.manage'));
     return this.webhooks.processPending(user.organizationId, 50);
   }
 
   @Post(':id/retry')
   @RequirePermissions('channels.manage')
   retry(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
-    return this.webhooks.retry(user.organizationId, id);
+    return this.webhooks.retry(user.organizationId, id, resolveDataScope(user, 'channels.manage'));
   }
 }

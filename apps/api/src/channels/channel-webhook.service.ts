@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { ChannelType, ChannelWebhookEventStatus, Prisma } from '@prisma/client';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { channelScopeWhere, type DataScope } from '../auth/data-scope';
 import { ConversationsService, InboundChannelMessage } from '../conversations/conversations.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SalesService } from '../sales/sales.service';
@@ -87,9 +88,10 @@ export class ChannelWebhookService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async list(organizationId: string, query: ListChannelWebhookEventsDto) {
+  async list(organizationId: string, query: ListChannelWebhookEventsDto, scope: DataScope) {
+    const channelAccount = channelScopeWhere(organizationId, scope);
     const where: Prisma.ChannelWebhookEventWhereInput = {
-      channelAccount: { organizationId },
+      channelAccount,
       ...(query.channelAccountId ? { channelAccountId: query.channelAccountId } : {}),
       ...(query.status !== 'ALL' ? { status: query.status as ChannelWebhookEventStatus } : {}),
     };
@@ -114,7 +116,7 @@ export class ChannelWebhookService implements OnModuleInit, OnModuleDestroy {
         orderBy: { receivedAt: 'desc' },
         take: query.limit,
       }),
-      Promise.all(statuses.map((status) => this.prisma.channelWebhookEvent.count({ where: { channelAccount: { organizationId }, status } }))),
+      Promise.all(statuses.map((status) => this.prisma.channelWebhookEvent.count({ where: { channelAccount, status } }))),
     ]);
     const summary = Object.fromEntries(statuses.map((status, index) => [status, counts[index]])) as Record<ChannelWebhookEventStatus, number>;
     return { events, summary, total: Object.values(summary).reduce((sum, value) => sum + value, 0) };
@@ -156,8 +158,8 @@ export class ChannelWebhookService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async retry(organizationId: string, eventId: string) {
-    const event = await this.prisma.channelWebhookEvent.findFirst({ where: { id: eventId, channelAccount: { organizationId } } });
+  async retry(organizationId: string, eventId: string, scope: DataScope) {
+    const event = await this.prisma.channelWebhookEvent.findFirst({ where: { id: eventId, channelAccount: channelScopeWhere(organizationId, scope) } });
     if (!event) throw new NotFoundException('Không tìm thấy sự kiện tích hợp');
     await this.prisma.channelWebhookEvent.update({
       where: { id: event.id },

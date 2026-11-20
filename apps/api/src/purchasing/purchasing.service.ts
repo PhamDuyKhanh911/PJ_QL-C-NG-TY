@@ -4,6 +4,7 @@ import { queueInventorySync } from '../channels/queue-inventory-sync';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePurchaseOrderDto } from './dto/create-purchase-order.dto';
 import { ReceivePurchaseOrderDto } from './dto/receive-purchase-order.dto';
+import { DataScope, warehouseScopeWhere } from '../auth/data-scope';
 
 @Injectable()
 export class PurchasingService {
@@ -13,15 +14,15 @@ export class PurchasingService {
     return this.prisma.supplier.findMany({ where: { organizationId, active: true }, orderBy: { name: 'asc' } });
   }
 
-  async suggestions(organizationId: string) {
+  async suggestions(organizationId: string, scope: DataScope) {
     const [balances, incomingItems] = await Promise.all([
       this.prisma.inventoryBalance.findMany({
-        where: { warehouse: { branch: { organizationId } } },
+        where: { warehouse: warehouseScopeWhere(organizationId, scope) },
         include: { warehouse: true, variant: { include: { product: true } } },
         orderBy: [{ warehouse: { name: 'asc' } }, { variant: { sku: 'asc' } }],
       }),
       this.prisma.purchaseOrderItem.findMany({
-        where: { purchaseOrder: { organizationId, status: { in: [PurchaseOrderStatus.ORDERED, PurchaseOrderStatus.PARTIALLY_RECEIVED] } } },
+        where: { purchaseOrder: { organizationId, warehouse: warehouseScopeWhere(organizationId, scope), status: { in: [PurchaseOrderStatus.ORDERED, PurchaseOrderStatus.PARTIALLY_RECEIVED] } } },
         select: { variantId: true, orderedQuantity: true, receivedQuantity: true, purchaseOrder: { select: { warehouseId: true } } },
       }),
     ]);
@@ -38,27 +39,27 @@ export class PurchasingService {
     }).filter((item) => item.projectedAvailable <= item.reorderPoint && item.suggestedQuantity > 0);
   }
 
-  orders(organizationId: string) {
+  orders(organizationId: string, scope: DataScope) {
     return this.prisma.purchaseOrder.findMany({
-      where: { organizationId },
+      where: { organizationId, warehouse: warehouseScopeWhere(organizationId, scope) },
       include: { supplier: true, warehouse: true, items: { include: { variant: { include: { product: true } } } } },
       orderBy: { createdAt: 'desc' },
     });
   }
 
-  async create(organizationId: string, userId: string, input: CreatePurchaseOrderDto) {
+  async create(organizationId: string, userId: string, input: CreatePurchaseOrderDto, scope: DataScope) {
     if (!input.items.length) throw new BadRequestException('Đơn mua phải có ít nhất một sản phẩm');
     if (new Set(input.items.map((item) => item.variantId)).size !== input.items.length) throw new BadRequestException('Không được lặp SKU trong cùng đơn mua');
     const [supplier, warehouse, variants] = await Promise.all([
       this.prisma.supplier.findFirst({ where: { id: input.supplierId, organizationId, active: true } }),
-      this.prisma.warehouse.findFirst({ where: { id: input.warehouseId, branch: { organizationId } } }),
+      this.prisma.warehouse.findFirst({ where: { AND: [{ id: input.warehouseId }, warehouseScopeWhere(organizationId, scope)] } }),
       this.prisma.productVariant.findMany({ where: { id: { in: input.items.map((item) => item.variantId) }, product: { organizationId } } }),
     ]);
     if (!supplier || !warehouse || variants.length !== input.items.length) throw new NotFoundException('Nhà cung cấp, kho hoặc SKU không hợp lệ');
     const suffix = `${Date.now().toString().slice(-8)}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`${organizationId}:${warehouse.id}:purchasing`})) IS NULL AS locked`);
-      const suggestions = await this.suggestions(organizationId);
+      const suggestions = await this.suggestions(organizationId, scope);
       const suggestedByVariant = new Map(suggestions.filter((item) => item.warehouseId === warehouse.id).map((item) => [item.variantId, item.suggestedQuantity]));
       for (const item of input.items) {
         const allowed = suggestedByVariant.get(item.variantId) ?? 0;
@@ -73,10 +74,10 @@ export class PurchasingService {
     });
   }
 
-  async receive(organizationId: string, userId: string, orderId: string, input: ReceivePurchaseOrderDto) {
+  async receive(organizationId: string, userId: string, orderId: string, input: ReceivePurchaseOrderDto, scope: DataScope) {
     if (!input.items.length) throw new BadRequestException('Cần nhập ít nhất một dòng hàng');
     if (new Set(input.items.map((item) => item.itemId)).size !== input.items.length) throw new BadRequestException('Không được lặp dòng hàng');
-    const order = await this.prisma.purchaseOrder.findFirst({ where: { id: orderId, organizationId }, include: { items: true } });
+    const order = await this.prisma.purchaseOrder.findFirst({ where: { id: orderId, organizationId, warehouse: warehouseScopeWhere(organizationId, scope) }, include: { items: true } });
     if (!order) throw new NotFoundException('Không tìm thấy đơn mua');
     if (order.status !== PurchaseOrderStatus.ORDERED && order.status !== PurchaseOrderStatus.PARTIALLY_RECEIVED) throw new BadRequestException('Đơn mua không còn ở trạng thái có thể nhận hàng');
     const byId = new Map(order.items.map((item) => [item.id, item]));

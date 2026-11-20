@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { ChannelSyncStatus, ChannelType, Prisma } from '@prisma/client';
 import { queueInventorySync } from '../channels/queue-inventory-sync';
+import { channelScopeWhere, type DataScope, warehouseScopeWhere } from '../auth/data-scope';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProductDto, CreateVariantDto } from './dto/create-product.dto';
 import { ReplaceMappingsDto } from './dto/replace-mappings.dto';
@@ -12,7 +13,7 @@ import { UpdateVariantDto } from './dto/update-variant.dto';
 export class CatalogService {
   constructor(private readonly prisma: PrismaService) {}
 
-  list(organizationId: string, search?: string, includeInactive = false) {
+  list(organizationId: string, search: string | undefined, includeInactive: boolean, scope: DataScope) {
     return this.prisma.product.findMany({
       where: {
         organizationId,
@@ -22,8 +23,8 @@ export class CatalogService {
       include: {
         variants: {
           include: {
-            balances: { include: { warehouse: true } },
-            mappings: { include: { channelAccount: { select: { id: true, code: true, name: true, type: true, active: true } } }, orderBy: { channelAccount: { name: 'asc' } } },
+            balances: { where: { warehouse: warehouseScopeWhere(organizationId, scope) }, include: { warehouse: true } },
+            mappings: { where: { channelAccount: channelScopeWhere(organizationId, scope) }, include: { channelAccount: { select: { id: true, code: true, name: true, type: true, active: true } } }, orderBy: { channelAccount: { name: 'asc' } } },
           },
           orderBy: { sku: 'asc' },
         },
@@ -32,17 +33,17 @@ export class CatalogService {
     });
   }
 
-  channels(organizationId: string) {
+  channels(organizationId: string, scope: DataScope) {
     return this.prisma.salesChannelAccount.findMany({
-      where: { organizationId, active: true },
+      where: { ...channelScopeWhere(organizationId, scope), active: true },
       select: { id: true, code: true, name: true, type: true },
       orderBy: [{ type: 'asc' }, { name: 'asc' }],
     });
   }
 
-  unmappedChannelSkus(organizationId: string) {
+  unmappedChannelSkus(organizationId: string, scope: DataScope) {
     return this.prisma.channelInventoryReconciliation.findMany({
-      where: { status: 'UNMAPPED', channelAccount: { organizationId, active: true } },
+      where: { status: 'UNMAPPED', channelAccount: { ...channelScopeWhere(organizationId, scope), active: true } },
       select: {
         id: true,
         externalProductId: true,
@@ -57,10 +58,10 @@ export class CatalogService {
     });
   }
 
-  async resolveChannelMapping(organizationId: string, userId: string, input: ResolveChannelMappingDto) {
+  async resolveChannelMapping(organizationId: string, userId: string, input: ResolveChannelMappingDto, scope: DataScope) {
     const [reconciliation, variant] = await Promise.all([
       this.prisma.channelInventoryReconciliation.findFirst({
-        where: { id: input.reconciliationId, status: 'UNMAPPED', channelAccount: { organizationId, active: true } },
+        where: { id: input.reconciliationId, status: 'UNMAPPED', channelAccount: { ...channelScopeWhere(organizationId, scope), active: true } },
         include: { channelAccount: true },
       }),
       this.prisma.productVariant.findFirst({
@@ -174,16 +175,17 @@ export class CatalogService {
     }
   }
 
-  async replaceMappings(organizationId: string, userId: string, variantId: string, input: ReplaceMappingsDto) {
+  async replaceMappings(organizationId: string, userId: string, variantId: string, input: ReplaceMappingsDto, scope: DataScope) {
     const variant = await this.prisma.productVariant.findFirst({ where: { id: variantId, product: { organizationId } } });
     if (!variant) throw new NotFoundException('Không tìm thấy SKU');
     const channelIds = input.mappings.map((mapping) => mapping.channelAccountId);
     if (new Set(channelIds).size !== channelIds.length) throw new BadRequestException('Một seller chỉ được ánh xạ một lần cho mỗi SKU');
-    const channels = await this.prisma.salesChannelAccount.findMany({ where: { organizationId, id: { in: channelIds }, active: true, type: { not: ChannelType.OFFLINE_STORE } }, select: { id: true } });
+    const scopedChannels = channelScopeWhere(organizationId, scope);
+    const channels = await this.prisma.salesChannelAccount.findMany({ where: { ...scopedChannels, id: { in: channelIds }, active: true, type: { not: ChannelType.OFFLINE_STORE } }, select: { id: true } });
     if (channels.length !== channelIds.length) throw new BadRequestException('Có seller không tồn tại hoặc đã ngừng hoạt động');
     try {
       await this.prisma.$transaction(async (tx) => {
-        const existing = await tx.channelSkuMapping.findMany({ where: { variantId: variant.id, channelAccount: { organizationId, active: true, type: { not: ChannelType.OFFLINE_STORE } } } });
+        const existing = await tx.channelSkuMapping.findMany({ where: { variantId: variant.id, channelAccount: { ...scopedChannels, active: true, type: { not: ChannelType.OFFLINE_STORE } } } });
         const incomingByChannel = new Map(input.mappings.map((mapping) => [mapping.channelAccountId, mapping]));
         const removedOrChanged = existing.filter((mapping) => {
           const incoming = incomingByChannel.get(mapping.channelAccountId);
@@ -199,7 +201,7 @@ export class CatalogService {
             triggeredById: userId,
           },
         });
-        await tx.channelSkuMapping.deleteMany({ where: { variantId: variant.id, channelAccount: { organizationId, active: true, type: { not: ChannelType.OFFLINE_STORE } } } });
+        await tx.channelSkuMapping.deleteMany({ where: { variantId: variant.id, channelAccount: { ...scopedChannels, active: true, type: { not: ChannelType.OFFLINE_STORE } } } });
         if (input.mappings.length) await tx.channelSkuMapping.createMany({
           data: input.mappings.map((mapping) => ({
             variantId: variant.id,
@@ -213,7 +215,7 @@ export class CatalogService {
       });
       return this.prisma.productVariant.findUnique({
         where: { id: variant.id },
-        include: { mappings: { include: { channelAccount: { select: { id: true, code: true, name: true, type: true } } } } },
+        include: { mappings: { where: { channelAccount: scopedChannels }, include: { channelAccount: { select: { id: true, code: true, name: true, type: true } } } } },
       });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new ConflictException('Mã SKU ngoài đã được dùng trong seller này');

@@ -4,15 +4,16 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateAfterSaleDto } from './dto/create-after-sale.dto';
 import { ResolveAfterSaleDto } from './dto/resolve-after-sale.dto';
 import { queueInventorySync } from '../channels/queue-inventory-sync';
+import { DataScope, orderScopeWhere } from '../auth/data-scope';
 
 @Injectable()
 export class AfterSalesService {
   constructor(private readonly prisma: PrismaService) {}
-  list(organizationId: string, status?: string) {
-    return this.prisma.afterSaleRequest.findMany({ where: { order: { channelAccount: { organizationId } }, ...(status ? { status } : {}) }, include: { order: { include: { channelAccount: true, customer: true, items: { include: { variant: { include: { product: true } } } } } } }, orderBy: { createdAt: 'desc' } });
+  list(organizationId: string, status: string | undefined, scope: DataScope) {
+    return this.prisma.afterSaleRequest.findMany({ where: { order: orderScopeWhere(organizationId, scope), ...(status ? { status } : {}) }, include: { order: { include: { channelAccount: true, customer: true, items: { include: { variant: { include: { product: true } } } } } } }, orderBy: { createdAt: 'desc' } });
   }
-  async create(organizationId: string, input: CreateAfterSaleDto) {
-    const order = await this.prisma.salesOrder.findFirst({ where: { id: input.orderId, channelAccount: { organizationId } }, include: { items: true, afterSales: true } });
+  async create(organizationId: string, input: CreateAfterSaleDto, scope: DataScope) {
+    const order = await this.prisma.salesOrder.findFirst({ where: { AND: [{ id: input.orderId }, orderScopeWhere(organizationId, scope)] }, include: { items: true, afterSales: true } });
     if (!order) throw new NotFoundException('Không tìm thấy đơn hàng');
     const eligibleStatuses: OrderStatus[] = [OrderStatus.SHIPPED, OrderStatus.DELIVERED, OrderStatus.PARTIALLY_RETURNED];
     if (!eligibleStatuses.includes(order.status)) throw new BadRequestException('Đơn hàng chưa đủ điều kiện tạo yêu cầu hậu mãi');
@@ -22,8 +23,8 @@ export class AfterSalesService {
     if (input.quantity + pendingOrDone > order.items.reduce((sum, current) => sum + current.quantity, 0)) throw new BadRequestException('Số lượng hậu mãi vượt quá số lượng đã mua');
     return this.prisma.afterSaleRequest.create({ data: { orderId: order.id, type: input.type, reasonCode: `${input.reasonCode}|SKU:${input.variantId}`, responsibleParty: input.responsibleParty, quantity: input.quantity, status: 'PENDING' }, include: { order: true } });
   }
-  async resolve(organizationId: string, id: string, userId: string, input: ResolveAfterSaleDto) {
-    const request = await this.prisma.afterSaleRequest.findFirst({ where: { id, order: { channelAccount: { organizationId } } }, include: { order: { include: { items: true, afterSales: true } } } });
+  async resolve(organizationId: string, id: string, userId: string, input: ResolveAfterSaleDto, scope: DataScope) {
+    const request = await this.prisma.afterSaleRequest.findFirst({ where: { id, order: orderScopeWhere(organizationId, scope) }, include: { order: { include: { items: true, afterSales: true } } } });
     if (!request) throw new NotFoundException('Không tìm thấy yêu cầu hậu mãi');
     if (request.status !== 'PENDING') throw new BadRequestException('Yêu cầu đã được xử lý');
     if (!input.approved) return this.prisma.afterSaleRequest.update({ where: { id }, data: { status: 'REJECTED', reasonCode: `${request.reasonCode}|NOTE:${input.note ?? 'REJECTED'}` } });
@@ -31,8 +32,8 @@ export class AfterSalesService {
     const awaitingReturn = returnTypes.includes(request.type);
     return this.prisma.afterSaleRequest.update({ where: { id }, data: { status: awaitingReturn ? 'AWAITING_RETURN' : 'COMPLETED', reasonCode: `${request.reasonCode}|NOTE:${input.note ?? 'APPROVED'}` } });
   }
-  async receive(organizationId: string, id: string, userId: string, note?: string) {
-    const request = await this.prisma.afterSaleRequest.findFirst({ where: { id, order: { channelAccount: { organizationId } } }, include: { order: { include: { items: true, afterSales: true } } } });
+  async receive(organizationId: string, id: string, userId: string, note: string | undefined, scope: DataScope) {
+    const request = await this.prisma.afterSaleRequest.findFirst({ where: { id, order: orderScopeWhere(organizationId, scope) }, include: { order: { include: { items: true, afterSales: true } } } });
     if (!request) throw new NotFoundException('Không tìm thấy yêu cầu hậu mãi');
     if (request.status !== 'AWAITING_RETURN') throw new BadRequestException('Yêu cầu không ở trạng thái chờ hàng về kho');
     if (!request.order.warehouseId) throw new BadRequestException('Đơn hàng không có kho nhận hoàn');
@@ -49,8 +50,8 @@ export class AfterSalesService {
       return tx.afterSaleRequest.update({ where: { id }, data: { status: 'COMPLETED', reasonCode: `${request.reasonCode}|RECEIVED:${note ?? 'WAREHOUSE_CONFIRMED'}` } });
     });
   }
-  async markLost(organizationId: string, id: string, note?: string) {
-    const request = await this.prisma.afterSaleRequest.findFirst({ where: { id, order: { channelAccount: { organizationId } } } });
+  async markLost(organizationId: string, id: string, note: string | undefined, scope: DataScope) {
+    const request = await this.prisma.afterSaleRequest.findFirst({ where: { id, order: orderScopeWhere(organizationId, scope) } });
     if (!request) throw new NotFoundException('Không tìm thấy yêu cầu hậu mãi');
     if (request.status !== 'AWAITING_RETURN') throw new BadRequestException('Chỉ có thể báo thất lạc khi đang chờ hàng về');
     return this.prisma.afterSaleRequest.update({ where: { id }, data: { status: 'LOST_IN_TRANSIT', responsibleParty: 'CARRIER', reasonCode: `${request.reasonCode}|LOST:${note ?? 'CARRIER_NOT_RETURNED'}` } });

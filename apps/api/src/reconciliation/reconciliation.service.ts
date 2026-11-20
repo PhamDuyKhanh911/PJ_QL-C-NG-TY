@@ -2,18 +2,19 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { OrderStatus, Prisma, ReconciliationStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SyncSettlementsDto } from './dto/sync-settlements.dto';
+import { channelScopeWhere, DataScope, orderScopeWhere } from '../auth/data-scope';
 
 @Injectable()
 export class ReconciliationService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async summary(organizationId: string) {
+  async summary(organizationId: string, scope: DataScope) {
     const eligibleStatuses = [OrderStatus.DELIVERED, OrderStatus.RETURNED, OrderStatus.PARTIALLY_RETURNED];
-    const [channels, eligibleOrders, settlements] = await Promise.all([
-      this.prisma.salesChannelAccount.findMany({ where: { organizationId, active: true }, orderBy: [{ type: 'asc' }, { name: 'asc' }] }),
-      this.prisma.salesOrder.findMany({ where: { channelAccount: { organizationId }, status: { in: eligibleStatuses } }, select: { id: true, channelAccountId: true, total: true } }),
-      this.prisma.orderSettlement.findMany({ where: { channelAccount: { organizationId } }, include: { order: { select: { orderNumber: true } } }, orderBy: { updatedAt: 'desc' } }),
+    const [eligibleOrders, settlements] = await Promise.all([
+      this.prisma.salesOrder.findMany({ where: { AND: [orderScopeWhere(organizationId, scope)], status: { in: eligibleStatuses } }, select: { id: true, channelAccountId: true, total: true, channelAccount: true } }),
+      this.prisma.orderSettlement.findMany({ where: { order: orderScopeWhere(organizationId, scope) }, include: { channelAccount: true, order: { select: { orderNumber: true } } }, orderBy: { updatedAt: 'desc' } }),
     ]);
+    const channels = [...new Map([...eligibleOrders.map((order) => order.channelAccount), ...settlements.map((row) => row.channelAccount)].map((channel) => [channel.id, channel])).values()].sort((a, b) => a.name.localeCompare(b.name));
     const settlementByOrder = new Map(settlements.map((item) => [item.orderId, item]));
     const byChannel = channels.map((channel) => {
       const orders = eligibleOrders.filter((order) => order.channelAccountId === channel.id);
@@ -29,10 +30,10 @@ export class ReconciliationService {
     return { totals, byChannel, issues, recentSettlements: settlements.slice(0, 50) };
   }
 
-  async receivables(organizationId: string) {
+  async receivables(organizationId: string, scope: DataScope) {
     const orders = await this.prisma.salesOrder.findMany({
       where: {
-        channelAccount: { organizationId },
+        AND: [orderScopeWhere(organizationId, scope)],
         status: { in: [OrderStatus.DELIVERED, OrderStatus.PARTIALLY_RETURNED] },
       },
       select: {
@@ -159,8 +160,8 @@ export class ReconciliationService {
     };
   }
 
-  async sync(organizationId: string, userId: string, input: SyncSettlementsDto) {
-    const channel = await this.prisma.salesChannelAccount.findFirst({ where: { id: input.channelAccountId, organizationId, active: true } });
+  async sync(organizationId: string, userId: string, input: SyncSettlementsDto, scope: DataScope) {
+    const channel = await this.prisma.salesChannelAccount.findFirst({ where: { AND: [{ id: input.channelAccountId, active: true }, channelScopeWhere(organizationId, scope)] } });
     if (!channel) throw new NotFoundException('Không tìm thấy gian hàng');
     const orderNumbers = input.entries.map((entry) => entry.orderNumber);
     if (new Set(orderNumbers).size !== orderNumbers.length) throw new BadRequestException('Dữ liệu đối soát có mã đơn trùng');

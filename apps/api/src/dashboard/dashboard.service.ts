@@ -1,26 +1,27 @@
 import { Injectable } from '@nestjs/common';
 import { OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { channelScopeWhere, DataScope, orderScopeWhere, warehouseScopeWhere } from '../auth/data-scope';
 
 @Injectable()
 export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async summary(organizationId: string) {
+  async summary(organizationId: string, scope: DataScope) {
     const now = new Date();
     const today = new Date(now); today.setHours(0, 0, 0, 0);
     const thirtyDaysAgo = new Date(now); thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     const sevenDaysAgo = new Date(today); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
 
     const [orders, balances, conversations, channels, pendingSyncs, staleSyncs, inventoryMismatches, unmappedChannelSkus] = await Promise.all([
-      this.prisma.salesOrder.findMany({ where: { channelAccount: { organizationId }, orderedAt: { gte: thirtyDaysAgo } }, include: { channelAccount: true } }),
-      this.prisma.inventoryBalance.findMany({ where: { warehouse: { branch: { organizationId } } }, include: { warehouse: true, variant: { include: { product: true } } } }),
-      this.prisma.conversation.findMany({ where: { channelAccount: { organizationId }, status: { in: ['UNREAD', 'UNREPLIED'] } }, include: { channelAccount: true, customerIdentity: true }, orderBy: { lastMessageAt: 'asc' } }),
-      this.prisma.salesChannelAccount.findMany({ where: { organizationId, active: true }, orderBy: { name: 'asc' } }),
-      this.prisma.channelSyncRun.count({ where: { channelAccount: { organizationId }, status: 'RUNNING' } }),
-      this.prisma.channelSyncRun.count({ where: { channelAccount: { organizationId }, status: 'RUNNING', startedAt: { lt: new Date(Date.now() - 15 * 60_000) } } }),
-      this.prisma.channelInventoryReconciliation.count({ where: { channelAccount: { organizationId }, status: 'MISMATCH' } }),
-      this.prisma.channelInventoryReconciliation.count({ where: { channelAccount: { organizationId }, status: 'UNMAPPED' } }),
+      this.prisma.salesOrder.findMany({ where: { AND: [orderScopeWhere(organizationId, scope)], orderedAt: { gte: thirtyDaysAgo } }, include: { channelAccount: true } }),
+      this.prisma.inventoryBalance.findMany({ where: { warehouse: warehouseScopeWhere(organizationId, scope) }, include: { warehouse: true, variant: { include: { product: true } } } }),
+      this.prisma.conversation.findMany({ where: { channelAccount: channelScopeWhere(organizationId, scope), status: { in: ['UNREAD', 'UNREPLIED'] } }, include: { channelAccount: true, customerIdentity: true }, orderBy: { lastMessageAt: 'asc' } }),
+      this.prisma.salesChannelAccount.findMany({ where: { ...channelScopeWhere(organizationId, scope), active: true }, orderBy: { name: 'asc' } }),
+      this.prisma.channelSyncRun.count({ where: { channelAccount: channelScopeWhere(organizationId, scope), status: 'RUNNING' } }),
+      this.prisma.channelSyncRun.count({ where: { channelAccount: channelScopeWhere(organizationId, scope), status: 'RUNNING', startedAt: { lt: new Date(Date.now() - 15 * 60_000) } } }),
+      this.prisma.channelInventoryReconciliation.count({ where: { channelAccount: channelScopeWhere(organizationId, scope), status: 'MISMATCH' } }),
+      this.prisma.channelInventoryReconciliation.count({ where: { channelAccount: channelScopeWhere(organizationId, scope), status: 'UNMAPPED' } }),
     ]);
 
     const activeStatuses: OrderStatus[] = [OrderStatus.PENDING, OrderStatus.CONFIRMED, OrderStatus.PACKING, OrderStatus.SHIPPED];

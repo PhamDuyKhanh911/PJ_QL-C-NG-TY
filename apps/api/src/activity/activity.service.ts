@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { channelScopeWhere, type DataScope, orderScopeWhere, warehouseScopeWhere } from '../auth/data-scope';
 import { PrismaService } from '../prisma/prisma.service';
 import { ListActivityDto } from './dto/list-activity.dto';
 
@@ -19,11 +20,11 @@ type ActivityItem = {
 export class ActivityService {
   constructor(private readonly prisma: PrismaService) {}
 
-  actors(organizationId: string) {
-    return this.prisma.user.findMany({ where: { organizationId }, select: { id: true, displayName: true, email: true, active: true }, orderBy: { displayName: 'asc' } });
+  actors(organizationId: string, currentUserId: string, scope: DataScope) {
+    return this.prisma.user.findMany({ where: { organizationId, ...(!scope.organization ? { id: currentUserId } : {}) }, select: { id: true, displayName: true, email: true, active: true }, orderBy: { displayName: 'asc' } });
   }
 
-  async list(organizationId: string, query: ListActivityDto) {
+  async list(organizationId: string, query: ListActivityDto, scope: DataScope) {
     const from = query.from ? new Date(query.from) : new Date(Date.now() - 30 * 24 * 60 * 60_000);
     const to = query.to ? new Date(query.to) : new Date();
     const date = { gte: from, lte: to };
@@ -31,11 +32,11 @@ export class ActivityService {
     const take = query.limit;
 
     const [audits, inventory, fulfillment, syncRuns, purchases] = await Promise.all([
-      this.prisma.auditEvent.findMany({ where: { organizationId, createdAt: date, ...(query.userId ? { actorId: query.userId } : {}), ...(query.category === 'ALL' ? {} : { category: query.category }) }, orderBy: { createdAt: 'desc' }, take }),
-      includeCategory('INVENTORY') ? this.prisma.inventoryTransaction.findMany({ where: { warehouse: { branch: { organizationId } }, createdAt: date, ...(query.userId ? { performedById: query.userId } : {}) }, include: { warehouse: true }, orderBy: { createdAt: 'desc' }, take }) : [],
-      includeCategory('FULFILLMENT') ? this.prisma.orderFulfillmentEvent.findMany({ where: { order: { channelAccount: { organizationId } }, createdAt: date, ...(query.userId ? { performedById: query.userId } : {}) }, include: { order: { select: { orderNumber: true, channelAccount: { select: { name: true } } } } }, orderBy: { createdAt: 'desc' }, take }) : [],
-      includeCategory('CHANNEL') ? this.prisma.channelSyncRun.findMany({ where: { channelAccount: { organizationId }, startedAt: date, ...(query.userId ? { triggeredById: query.userId } : {}) }, include: { channelAccount: { select: { name: true, code: true } } }, orderBy: { startedAt: 'desc' }, take }) : [],
-      includeCategory('PURCHASING') ? this.prisma.purchaseOrder.findMany({ where: { organizationId, createdAt: date, ...(query.userId ? { createdById: query.userId } : {}) }, include: { supplier: { select: { name: true } }, warehouse: { select: { name: true } } }, orderBy: { createdAt: 'desc' }, take }) : [],
+      scope.organization ? this.prisma.auditEvent.findMany({ where: { organizationId, createdAt: date, ...(query.userId ? { actorId: query.userId } : {}), ...(query.category === 'ALL' ? {} : { category: query.category }) }, orderBy: { createdAt: 'desc' }, take }) : [],
+      includeCategory('INVENTORY') ? this.prisma.inventoryTransaction.findMany({ where: { warehouse: warehouseScopeWhere(organizationId, scope), createdAt: date, ...(query.userId ? { performedById: query.userId } : {}) }, include: { warehouse: true }, orderBy: { createdAt: 'desc' }, take }) : [],
+      includeCategory('FULFILLMENT') ? this.prisma.orderFulfillmentEvent.findMany({ where: { order: orderScopeWhere(organizationId, scope), createdAt: date, ...(query.userId ? { performedById: query.userId } : {}) }, include: { order: { select: { orderNumber: true, channelAccount: { select: { name: true } } } } }, orderBy: { createdAt: 'desc' }, take }) : [],
+      includeCategory('CHANNEL') ? this.prisma.channelSyncRun.findMany({ where: { channelAccount: channelScopeWhere(organizationId, scope), startedAt: date, ...(query.userId ? { triggeredById: query.userId } : {}) }, include: { channelAccount: { select: { name: true, code: true } } }, orderBy: { startedAt: 'desc' }, take }) : [],
+      includeCategory('PURCHASING') ? this.prisma.purchaseOrder.findMany({ where: { organizationId, warehouse: warehouseScopeWhere(organizationId, scope), createdAt: date, ...(query.userId ? { createdById: query.userId } : {}) }, include: { supplier: { select: { name: true } }, warehouse: { select: { name: true } } }, orderBy: { createdAt: 'desc' }, take }) : [],
     ]);
 
     const variantIds = [...new Set(inventory.map((item) => item.variantId))];

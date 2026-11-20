@@ -7,6 +7,7 @@ import { AssignConversationDto } from './dto/assign-conversation.dto';
 import { ListConversationsDto } from './dto/list-conversations.dto';
 import { SendMessageDto } from './dto/send-message.dto';
 import { CloseSaleDto } from './dto/close-sale.dto';
+import { channelScopeWhere, resolveDataScope } from '../auth/data-scope';
 
 export type InboundChannelMessage = {
   externalConversationId: string;
@@ -25,7 +26,7 @@ export class ConversationsService {
   ) {}
 
   async list(user: AuthenticatedUser, query: ListConversationsDto) {
-    const channelIds = await this.allowedChannelIds(user);
+    const channelIds = await this.allowedChannelIds(user, 'conversations.read');
     if (query.channelAccountId && !channelIds.includes(query.channelAccountId)) return [];
     const where: Prisma.ConversationWhereInput = {
       channelAccountId: query.channelAccountId ?? { in: channelIds },
@@ -48,19 +49,19 @@ export class ConversationsService {
   }
 
   async detail(user: AuthenticatedUser, conversationId: string) {
-    await this.assertAccessible(user, conversationId);
+    const channelIds = await this.assertAccessible(user, conversationId, 'conversations.read');
     return this.prisma.conversation.findUniqueOrThrow({
       where: { id: conversationId },
       include: {
         channelAccount: true,
-        customerIdentity: { include: { customer: { include: { orders: { include: { channelAccount: true }, orderBy: { orderedAt: 'desc' }, take: 5 } } } } },
+        customerIdentity: { include: { customer: { include: { orders: { where: { channelAccountId: { in: channelIds } }, include: { channelAccount: true }, orderBy: { orderedAt: 'desc' }, take: 5 } } } } },
         messages: { orderBy: { sentAt: 'asc' } },
       },
     });
   }
 
   async reply(user: AuthenticatedUser, conversationId: string, input: SendMessageDto) {
-    await this.assertAccessible(user, conversationId);
+    await this.assertAccessible(user, conversationId, 'conversations.reply');
     const message = await this.prisma.$transaction(async (tx) => {
       const message = await tx.message.create({
         data: {
@@ -140,14 +141,14 @@ export class ConversationsService {
   }
 
   async assign(user: AuthenticatedUser, conversationId: string, input: AssignConversationDto) {
-    await this.assertAccessible(user, conversationId);
+    await this.assertAccessible(user, conversationId, 'conversations.reply');
     const target = await this.prisma.user.findFirst({ where: { id: input.userId, organizationId: user.organizationId, active: true } });
     if (!target) throw new NotFoundException('Không tìm thấy nhân viên được phân công');
     return this.prisma.conversation.update({ where: { id: conversationId }, data: { assignedUserId: target.id } });
   }
 
   async closeSale(user: AuthenticatedUser, conversationId: string, input: CloseSaleDto) {
-    await this.assertAccessible(user, conversationId);
+    await this.assertAccessible(user, conversationId, 'conversations.close_sale');
     const conversation = await this.prisma.conversation.findUniqueOrThrow({ where: { id: conversationId } });
     const order = await this.prisma.salesOrder.findFirst({ where: { id: input.orderId, channelAccount: { organizationId: user.organizationId }, status: { not: 'CANCELLED' } } });
     if (!order) throw new NotFoundException('Không tìm thấy đơn hàng hợp lệ để ghi nhận doanh thu');
@@ -159,23 +160,22 @@ export class ConversationsService {
     return this.delivery.processPending(organizationId, 50);
   }
 
-  retryMessage(organizationId: string, messageId: string) {
-    return this.delivery.retry(organizationId, messageId);
+  async retryMessage(user: AuthenticatedUser, messageId: string) {
+    const message = await this.prisma.message.findFirst({ where: { id: messageId, conversation: { channelAccount: channelScopeWhere(user.organizationId, resolveDataScope(user, 'conversations.reply')) } }, select: { id: true } });
+    if (!message) throw new ForbiddenException('Bạn không có quyền gửi lại tin nhắn của seller này');
+    return this.delivery.retry(user.organizationId, messageId);
   }
 
-  private async assertAccessible(user: AuthenticatedUser, conversationId: string) {
+  private async assertAccessible(user: AuthenticatedUser, conversationId: string, permission: string) {
     const conversation = await this.prisma.conversation.findUnique({ where: { id: conversationId }, select: { channelAccountId: true } });
     if (!conversation) throw new NotFoundException('Không tìm thấy hội thoại');
-    const allowed = await this.allowedChannelIds(user);
+    const allowed = await this.allowedChannelIds(user, permission);
     if (!allowed.includes(conversation.channelAccountId)) throw new ForbiddenException('Bạn không có quyền truy cập gian hàng này');
+    return allowed;
   }
 
-  private async allowedChannelIds(user: AuthenticatedUser) {
-    const hasOrganizationScope = user.scopes.some((scope) => scope.type === 'ORGANIZATION' && scope.id === user.organizationId);
-    if (hasOrganizationScope) {
-      const channels = await this.prisma.salesChannelAccount.findMany({ where: { organizationId: user.organizationId, active: true }, select: { id: true } });
-      return channels.map((channel) => channel.id);
-    }
-    return user.scopes.filter((scope) => scope.type === 'CHANNEL' && scope.id).map((scope) => scope.id!);
+  private async allowedChannelIds(user: AuthenticatedUser, permission: string) {
+    const channels = await this.prisma.salesChannelAccount.findMany({ where: { ...channelScopeWhere(user.organizationId, resolveDataScope(user, permission)), active: true }, select: { id: true } });
+    return channels.map((channel) => channel.id);
   }
 }

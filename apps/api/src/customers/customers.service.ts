@@ -2,14 +2,18 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ListCustomersDto } from './dto/list-customers.dto';
+import { channelScopeWhere, DataScope, orderScopeWhere } from '../auth/data-scope';
 
 @Injectable()
 export class CustomersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async list(organizationId: string, query: ListCustomersDto) {
+  async list(organizationId: string, query: ListCustomersDto, scope: DataScope) {
+    const orderScope = orderScopeWhere(organizationId, scope);
+    const channelScope = channelScopeWhere(organizationId, scope);
+    const access: Prisma.CustomerWhereInput = scope.organization ? { organizationId } : { organizationId, OR: [{ orders: { some: orderScope } }, { identities: { some: { conversations: { some: { channelAccount: channelScope } } } } }] };
     const where: Prisma.CustomerWhereInput = {
-      organizationId,
+      AND: [access],
       ...(query.search ? { OR: [
         { displayName: { contains: query.search, mode: 'insensitive' } },
         { phone: { contains: query.search } },
@@ -21,8 +25,8 @@ export class CustomersService {
       this.prisma.customer.findMany({
         where,
         include: {
-          orders: { select: { total: true, status: true, orderedAt: true, afterSales: { select: { id: true } } }, orderBy: { orderedAt: 'desc' } },
-          identities: { include: { conversations: { include: { channelAccount: { select: { id: true, name: true, type: true } } }, orderBy: { lastMessageAt: 'desc' }, take: 1 } } },
+          orders: { where: orderScope, select: { total: true, status: true, orderedAt: true, afterSales: { select: { id: true } } }, orderBy: { orderedAt: 'desc' } },
+          identities: { where: { conversations: { some: { channelAccount: channelScope } } }, include: { conversations: { where: { channelAccount: channelScope }, include: { channelAccount: { select: { id: true, name: true, type: true } } }, orderBy: { lastMessageAt: 'desc' }, take: 1 } } },
         },
         orderBy: { displayName: 'asc' }, skip: (query.page - 1) * query.limit, take: query.limit,
       }),
@@ -42,12 +46,15 @@ export class CustomersService {
     return { data, meta: { total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) } };
   }
 
-  async detail(organizationId: string, id: string) {
+  async detail(organizationId: string, id: string, scope: DataScope) {
+    const orderScope = orderScopeWhere(organizationId, scope);
+    const channelScope = channelScopeWhere(organizationId, scope);
+    const access: Prisma.CustomerWhereInput = scope.organization ? { organizationId } : { organizationId, OR: [{ orders: { some: orderScope } }, { identities: { some: { conversations: { some: { channelAccount: channelScope } } } } }] };
     const customer = await this.prisma.customer.findFirst({
-      where: { id, organizationId },
+      where: { id, AND: [access] },
       include: {
-        orders: { include: { channelAccount: true, afterSales: true, items: { include: { variant: { include: { product: true } } } } }, orderBy: { orderedAt: 'desc' }, take: 20 },
-        identities: { include: { conversations: { include: { channelAccount: true, messages: { orderBy: { sentAt: 'desc' }, take: 1 } }, orderBy: { lastMessageAt: 'desc' } } } },
+        orders: { where: orderScope, include: { channelAccount: true, afterSales: true, items: { include: { variant: { include: { product: true } } } } }, orderBy: { orderedAt: 'desc' }, take: 20 },
+        identities: { where: { conversations: { some: { channelAccount: channelScope } } }, include: { conversations: { where: { channelAccount: channelScope }, include: { channelAccount: true, messages: { orderBy: { sentAt: 'desc' }, take: 1 } }, orderBy: { lastMessageAt: 'desc' } } } },
       },
     });
     if (!customer) throw new NotFoundException('Không tìm thấy khách hàng');

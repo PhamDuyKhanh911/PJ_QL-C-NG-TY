@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { assertOrganizationScope, resolveDataScope } from '../auth/data-scope';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../auth/permissions.decorator';
 import { PermissionsGuard } from '../auth/permissions.guard';
@@ -19,42 +20,46 @@ export class CatalogController {
 
   @Get('products') @RequirePermissions('catalog.read')
   list(@CurrentUser() user: AuthenticatedUser, @Query() query: ListProductsDto) {
-    return this.catalog.list(user.organizationId, query.search, query.includeInactive);
+    return this.catalog.list(user.organizationId, query.search, query.includeInactive, resolveDataScope(user, 'catalog.read'));
   }
 
   @Get('channels') @RequirePermissions('catalog.read')
-  channels(@CurrentUser() user: AuthenticatedUser) { return this.catalog.channels(user.organizationId); }
+  channels(@CurrentUser() user: AuthenticatedUser) { return this.catalog.channels(user.organizationId, resolveDataScope(user, 'catalog.read')); }
 
   @Get('unmapped-channel-skus') @RequirePermissions('catalog.read')
-  unmappedChannelSkus(@CurrentUser() user: AuthenticatedUser) { return this.catalog.unmappedChannelSkus(user.organizationId); }
+  unmappedChannelSkus(@CurrentUser() user: AuthenticatedUser) { return this.catalog.unmappedChannelSkus(user.organizationId, resolveDataScope(user, 'catalog.read')); }
 
   @Post('channel-mappings/resolve') @RequirePermissions('catalog.manage')
   resolveChannelMapping(@CurrentUser() user: AuthenticatedUser, @Body() input: ResolveChannelMappingDto) {
-    return this.catalog.resolveChannelMapping(user.organizationId, user.id, input);
+    return this.catalog.resolveChannelMapping(user.organizationId, user.id, input, resolveDataScope(user, 'catalog.manage'));
   }
 
   @Post('products') @RequirePermissions('catalog.create')
   create(@CurrentUser() user: AuthenticatedUser, @Body() input: CreateProductDto) {
+    assertOrganizationScope(resolveDataScope(user, 'catalog.create'));
     return this.catalog.create(user.organizationId, input);
   }
 
   @Patch('products/:id') @RequirePermissions('catalog.manage')
   updateProduct(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() input: UpdateProductDto) {
+    assertOrganizationScope(resolveDataScope(user, 'catalog.manage'));
     return this.catalog.updateProduct(user.organizationId, user.id, id, input);
   }
 
   @Post('products/:id/variants') @RequirePermissions('catalog.manage')
   createVariant(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() input: CreateVariantDto) {
+    assertOrganizationScope(resolveDataScope(user, 'catalog.manage'));
     return this.catalog.createVariant(user.organizationId, id, input);
   }
 
   @Patch('variants/:id') @RequirePermissions('catalog.manage')
   updateVariant(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() input: UpdateVariantDto) {
+    assertOrganizationScope(resolveDataScope(user, 'catalog.manage'));
     return this.catalog.updateVariant(user.organizationId, user.id, id, input);
   }
 
   @Put('variants/:id/mappings') @RequirePermissions('catalog.manage')
   replaceMappings(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() input: ReplaceMappingsDto) {
-    return this.catalog.replaceMappings(user.organizationId, user.id, id, input);
+    return this.catalog.replaceMappings(user.organizationId, user.id, id, input, resolveDataScope(user, 'catalog.manage'));
   }
 }
