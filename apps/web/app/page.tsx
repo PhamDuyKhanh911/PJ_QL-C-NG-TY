@@ -61,6 +61,7 @@ export default function Dashboard() {
           <a href="/channels">Kênh bán hàng</a><a href="/inventory/channel-reconciliation">Đối chiếu tồn sàn {data && data.stats.inventoryMismatches + data.stats.unmappedChannelSkus > 0 && <b>{data.stats.inventoryMismatches + data.stats.unmappedChannelSkus}</b>}</a><a href="/integrations">Nhật ký tích hợp</a><a href="/inbox">Hộp thư chung {data && data.stats.unrepliedConversations > 0 && <b>{data.stats.unrepliedConversations}</b>}</a><a href="/assisted-sales">Chốt đơn qua chat</a><a href="/customers">Khách hàng</a>
           <a href="/purchasing">Mua hàng</a><a href="/reports">Báo cáo</a><a href="/reconciliation">Đối soát tiền về</a><a href="/receivables">Công nợ phải thu</a><a href="/reports/channels">Phát triển kênh</a><a href="/staff">Nhân viên & phân quyền</a><a>Cấu hình</a>
           <a href="/activity">Nhật ký hoạt động</a><a href="/backups">Sao lưu &amp; chuyển dữ liệu</a>
+          <a href="/alerts">Trung tâm cảnh báo {data && data.alerts.length > 0 && <b>{data.alerts.length}</b>}</a>
         </nav>
         <button className="user" onClick={logout}><i>AD</i><div>Quản trị viên<small>Đăng xuất</small></div></button>
       </aside>

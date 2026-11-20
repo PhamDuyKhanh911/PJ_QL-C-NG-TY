@@ -32,4 +32,5 @@ export const PERMISSION_CATALOG = [
   { code: 'reconciliation.sync', group: 'Đối soát', name: 'Đồng bộ dữ liệu thanh toán từ kênh bán' },
   { code: 'backups.manage', group: 'Sao lưu dữ liệu', name: 'Tạo, kiểm tra và tải bản sao lưu toàn hệ thống' },
   { code: 'activity.read', group: 'Kiểm soát', name: 'Xem nhật ký hoạt động và người chịu trách nhiệm' },
+  { code: 'alerts.read', group: 'Kiểm soát', name: 'Xem cảnh báo vận hành tập trung' },
 ] as const;

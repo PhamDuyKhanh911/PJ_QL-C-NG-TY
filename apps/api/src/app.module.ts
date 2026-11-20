@@ -19,6 +19,7 @@ import { FulfillmentModule } from './fulfillment/fulfillment.module';
 import { ReconciliationModule } from './reconciliation/reconciliation.module';
 import { BackupsModule } from './backups/backups.module';
 import { ActivityModule } from './activity/activity.module';
+import { AlertsModule } from './alerts/alerts.module';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { ActivityModule } from './activity/activity.module';
     ReconciliationModule,
     BackupsModule,
     ActivityModule,
+    AlertsModule,
   ],
   controllers: [HealthController],
 })
