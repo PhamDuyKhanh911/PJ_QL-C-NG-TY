@@ -23,6 +23,19 @@ export class AdministrationService {
     return this.prisma.role.findMany({ where: { organizationId }, include: { _count: { select: { assignments: true } } }, orderBy: { name: 'asc' } });
   }
 
+  async listScopes(organizationId: string) {
+    const organization = await this.prisma.organization.findUniqueOrThrow({
+      where: { id: organizationId },
+      select: { id: true, name: true, branches: { select: { id: true, name: true, warehouses: { select: { id: true, name: true, code: true } } } }, channels: { where: { active: true }, select: { id: true, name: true, code: true, type: true }, orderBy: { name: 'asc' } } },
+    });
+    return {
+      ORGANIZATION: [{ id: organization.id, name: organization.name }],
+      BRANCH: organization.branches.map((branch) => ({ id: branch.id, name: branch.name })),
+      WAREHOUSE: organization.branches.flatMap((branch) => branch.warehouses.map((warehouse) => ({ id: warehouse.id, name: warehouse.name, detail: `${branch.name} · ${warehouse.code}` }))),
+      CHANNEL: organization.channels.map((channel) => ({ id: channel.id, name: channel.name, detail: `${channel.code} · ${channel.type}` })),
+    };
+  }
+
   async createUser(organizationId: string, actorId: string, input: CreateUserDto) {
     try {
       const created = await this.prisma.user.create({
@@ -66,6 +79,16 @@ export class AdministrationService {
     });
     await this.prisma.auditEvent.create({ data: { organizationId, actorId, category: 'ADMINISTRATION', action: 'ROLE_ASSIGNED', entityType: 'USER', entityId: user.id, summary: `Gán vai trò ${role.name} cho ${user.displayName}`, metadata: { scopeType: input.scopeType, scopeId: input.scopeId } } });
     return assignment;
+  }
+
+  async revokeRole(organizationId: string, actorId: string, userId: string, assignmentId: string) {
+    const assignment = await this.prisma.userRoleAssignment.findFirst({ where: { id: assignmentId, userId, user: { organizationId } }, include: { user: true, role: true } });
+    if (!assignment) throw new NotFoundException('Không tìm thấy lượt gán vai trò');
+    const permissions = Array.isArray(assignment.role.permissions) ? assignment.role.permissions : [];
+    if (actorId === userId && permissions.includes('*')) throw new BadRequestException('Không thể tự thu hồi quyền toàn quyền của tài khoản đang đăng nhập');
+    await this.prisma.userRoleAssignment.delete({ where: { id: assignment.id } });
+    await this.prisma.auditEvent.create({ data: { organizationId, actorId, category: 'ADMINISTRATION', action: 'ROLE_REVOKED', entityType: 'USER', entityId: userId, summary: `Thu hồi vai trò ${assignment.role.name} khỏi ${assignment.user.displayName}`, metadata: { scopeType: assignment.scopeType, scopeId: assignment.scopeId ?? '' } } });
+    return { id: assignment.id, revoked: true };
   }
 
   async setActive(organizationId: string, userId: string, active: boolean, currentUserId: string) {

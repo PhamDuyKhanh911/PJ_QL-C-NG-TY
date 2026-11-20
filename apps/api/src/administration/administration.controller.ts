@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -16,10 +16,12 @@ import { PERMISSION_CATALOG } from './permissions.catalog';
 export class AdministrationController {
   constructor(private readonly administration: AdministrationService) {}
   @Get('permissions') @RequirePermissions('users.read') permissions() { return PERMISSION_CATALOG; }
+  @Get('scopes') @RequirePermissions('users.read') scopes(@CurrentUser() user: AuthenticatedUser) { return this.administration.listScopes(user.organizationId); }
   @Get('users') @RequirePermissions('users.read') users(@CurrentUser() user: AuthenticatedUser) { return this.administration.listUsers(user.organizationId); }
   @Post('users') @RequirePermissions('users.manage') createUser(@CurrentUser() user: AuthenticatedUser, @Body() input: CreateUserDto) { return this.administration.createUser(user.organizationId, user.id, input); }
   @Patch('users/:id/status') @RequirePermissions('users.manage') setStatus(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() input: UpdateUserStatusDto) { return this.administration.setActive(user.organizationId, id, input.active, user.id); }
   @Get('roles') @RequirePermissions('users.read') roles(@CurrentUser() user: AuthenticatedUser) { return this.administration.listRoles(user.organizationId); }
   @Post('roles') @RequirePermissions('roles.manage') createRole(@CurrentUser() user: AuthenticatedUser, @Body() input: CreateRoleDto) { return this.administration.createRole(user.organizationId, user.id, input); }
   @Post('users/:id/roles') @RequirePermissions('users.manage') assignRole(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() input: AssignRoleDto) { return this.administration.assignRole(user.organizationId, user.id, id, input); }
+  @Delete('users/:id/roles/:assignmentId') @RequirePermissions('users.manage') revokeRole(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Param('assignmentId') assignmentId: string) { return this.administration.revokeRole(user.organizationId, user.id, id, assignmentId); }
 }
