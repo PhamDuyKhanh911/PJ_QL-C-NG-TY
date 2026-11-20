@@ -6,6 +6,7 @@ import { RequirePermissions } from '../auth/permissions.decorator';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { AlertsService } from './alerts.service';
 import { ListAlertsDto } from './dto/list-alerts.dto';
+import { resolveDataScope } from '../auth/data-scope';
 
 @Controller('alerts')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -15,6 +16,6 @@ export class AlertsController {
   @Get()
   @RequirePermissions('alerts.read')
   list(@CurrentUser() user: AuthenticatedUser, @Query() query: ListAlertsDto) {
-    return this.alerts.list(user.organizationId, query);
+    return this.alerts.list(user.organizationId, query, resolveDataScope(user, 'alerts.read'));
   }
 }

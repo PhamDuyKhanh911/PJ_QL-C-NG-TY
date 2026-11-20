@@ -7,6 +7,7 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { ListOrdersDto } from './dto/list-orders.dto';
 import { queueInventorySync } from '../channels/queue-inventory-sync';
 import { SyncMarketplaceOrderDto } from './dto/sync-marketplace-order.dto';
+import { channelScopeWhere, DataScope, orderScopeWhere, warehouseScopeWhere } from '../auth/data-scope';
 
 export type MarketplaceStatusInput = {
   externalOrderId: string;
@@ -27,9 +28,9 @@ export type MarketplaceReturnInput = {
 export class SalesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async list(organizationId: string, query: ListOrdersDto) {
+  async list(organizationId: string, query: ListOrdersDto, scope: DataScope) {
     const where: Prisma.SalesOrderWhereInput = {
-      channelAccount: { organizationId },
+      AND: [orderScopeWhere(organizationId, scope)],
       ...(query.channelAccountId ? { channelAccountId: query.channelAccountId } : {}),
       ...(query.status ? { status: query.status as OrderStatus } : {}),
       ...(query.from || query.to ? { orderedAt: { ...(query.from ? { gte: new Date(query.from) } : {}), ...(query.to ? { lte: new Date(query.to) } : {}) } } : {}),
@@ -41,10 +42,10 @@ export class SalesService {
     return { data, total, page: query.page, limit: query.limit };
   }
 
-  async create(organizationId: string, performedById: string, input: CreateOrderDto) {
+  async create(organizationId: string, performedById: string, input: CreateOrderDto, scope: DataScope) {
     const [channel, warehouse, variants] = await Promise.all([
-      this.prisma.salesChannelAccount.findFirst({ where: { id: input.channelAccountId, organizationId, active: true } }),
-      this.prisma.warehouse.findFirst({ where: { id: input.warehouseId, branch: { organizationId } } }),
+      this.prisma.salesChannelAccount.findFirst({ where: { AND: [{ id: input.channelAccountId, active: true }, channelScopeWhere(organizationId, scope)] } }),
+      this.prisma.warehouse.findFirst({ where: { AND: [{ id: input.warehouseId }, warehouseScopeWhere(organizationId, scope)] } }),
       this.prisma.productVariant.findMany({ where: { id: { in: input.items.map((item) => item.variantId) }, product: { organizationId, active: true } } }),
     ]);
     if (!channel || !warehouse || variants.length !== new Set(input.items.map((item) => item.variantId)).size) throw new NotFoundException('Kênh bán, kho hoặc SKU không hợp lệ');
@@ -99,12 +100,13 @@ export class SalesService {
     });
   }
 
-  async syncMarketplace(organizationId: string, performedById: string, input: SyncMarketplaceOrderDto) {
-    const existing = await this.prisma.salesOrder.findFirst({ where: { channelAccountId: input.channelAccountId, externalOrderId: input.externalOrderId, channelAccount: { organizationId } }, include: { items: true } });
+  async syncMarketplace(organizationId: string, performedById: string, input: SyncMarketplaceOrderDto, scope?: DataScope) {
+    const effectiveScope = scope ?? { organization: true, branchIds: [], warehouseIds: [], channelIds: [] };
+    const existing = await this.prisma.salesOrder.findFirst({ where: { AND: [orderScopeWhere(organizationId, effectiveScope)], channelAccountId: input.channelAccountId, externalOrderId: input.externalOrderId }, include: { items: true } });
     if (existing) return { order: existing, duplicated: true };
     const [channel, warehouse, mappings] = await Promise.all([
-      this.prisma.salesChannelAccount.findFirst({ where: { id: input.channelAccountId, organizationId, active: true, type: { in: [ChannelType.SHOPEE, ChannelType.TIKTOK_SHOP] } } }),
-      this.prisma.warehouse.findFirst({ where: { id: input.warehouseId, branch: { organizationId } } }),
+      this.prisma.salesChannelAccount.findFirst({ where: { AND: [{ id: input.channelAccountId, active: true, type: { in: [ChannelType.SHOPEE, ChannelType.TIKTOK_SHOP] } }, channelScopeWhere(organizationId, effectiveScope)] } }),
+      this.prisma.warehouse.findFirst({ where: { AND: [{ id: input.warehouseId }, warehouseScopeWhere(organizationId, effectiveScope)] } }),
       this.prisma.channelSkuMapping.findMany({ where: { channelAccountId: input.channelAccountId, externalSkuId: { in: input.items.map((item) => item.externalSkuId) }, variant: { product: { organizationId, active: true } } }, include: { variant: true } }),
     ]);
     if (!channel || !warehouse) throw new NotFoundException('Seller hoặc kho nhận đơn không hợp lệ');
@@ -354,8 +356,8 @@ export class SalesService {
     });
   }
 
-  async cancel(organizationId: string, performedById: string, orderId: string, input: CancelOrderDto) {
-    const order = await this.prisma.salesOrder.findFirst({ where: { id: orderId, channelAccount: { organizationId } }, include: { items: true } });
+  async cancel(organizationId: string, performedById: string, orderId: string, input: CancelOrderDto, scope: DataScope) {
+    const order = await this.prisma.salesOrder.findFirst({ where: { AND: [{ id: orderId }, orderScopeWhere(organizationId, scope)] }, include: { items: true } });
     if (!order || !order.warehouseId) throw new NotFoundException('Không tìm thấy đơn hàng');
     if (!([OrderStatus.PENDING, OrderStatus.CONFIRMED, OrderStatus.PACKING] as OrderStatus[]).includes(order.status)) throw new BadRequestException('Trạng thái đơn hàng không cho phép hủy');
     return this.prisma.$transaction(async (tx) => {
@@ -368,9 +370,9 @@ export class SalesService {
     });
   }
 
-  async metrics(organizationId: string, from?: string, to?: string) {
+  async metrics(organizationId: string, from: string | undefined, to: string | undefined, scope: DataScope) {
     const orders = await this.prisma.salesOrder.findMany({
-      where: { channelAccount: { organizationId }, ...(from || to ? { orderedAt: { ...(from ? { gte: new Date(from) } : {}), ...(to ? { lte: new Date(to) } : {}) } } : {}) },
+      where: { AND: [orderScopeWhere(organizationId, scope)], ...(from || to ? { orderedAt: { ...(from ? { gte: new Date(from) } : {}), ...(to ? { lte: new Date(to) } : {}) } } : {}) },
       include: { channelAccount: true, afterSales: true },
     });
     const total = orders.length;

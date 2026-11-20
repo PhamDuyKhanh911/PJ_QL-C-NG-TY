@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import './staff.css';
+import './scope-policy.css';
 
 type Role = { id: string; code: string; name: string; permissions: string[]; _count?: { assignments: number } };
 type Assignment = { id: string; scopeType: ScopeType; scopeId?: string; role: Role };
@@ -112,6 +113,7 @@ export default function StaffPage() {
   return <main className="staff-page">
     <header className="staff-header"><div><p>QUẢN TRỊ HỆ THỐNG</p><h1>Nhân viên & phân quyền</h1><span>Gán đúng chức năng và đúng phạm vi dữ liệu cho từng tài khoản.</span></div><div><a href="/activity">Nhật ký</a><a href="/">← Tổng quan</a>{canManageRoles && <button className="secondary" onClick={() => setPanel(panel === 'ROLE' ? 'NONE' : 'ROLE')}>+ Tạo vai trò</button>}{canManageUsers && <button onClick={() => setPanel(panel === 'USER' ? 'NONE' : 'USER')}>+ Thêm nhân viên</button>}</div></header>
     <section className="staff-metrics"><article><span>Tổng nhân viên</span><strong>{users.length}</strong></article><article><span>Đang hoạt động</span><strong>{users.filter((user) => user.active).length}</strong></article><article><span>Vai trò</span><strong>{roles.length}</strong></article><article><span>Chưa gán vai trò</span><strong>{users.filter((user) => !user.roleAssignments.length).length}</strong></article></section>
+    <section className="scope-policy"><b>Phạm vi đang được áp dụng vào dữ liệu thực tế</b><span>Nhân viên chỉ xem và xử lý đơn, tồn kho, xuất kho hoặc seller thuộc phạm vi của chính vai trò đó. Nếu một nhân viên cần làm việc với cả seller và kho, hãy gán vai trò tại cả hai phạm vi.</span></section>
     {panel === 'USER' && <form className="staff-form" onSubmit={createUser}><label>Họ và tên<input name="displayName" minLength={2} required /></label><label>Email<input name="email" type="email" required /></label><label>Mật khẩu ban đầu<input name="password" type="password" minLength={8} required /></label><button disabled={Boolean(busy)}>{busy === 'create-user' ? 'Đang tạo…' : 'Tạo tài khoản'}</button></form>}
     {panel === 'ROLE' && <form className="role-form" onSubmit={createRole}><div className="role-form-head"><label>Tên vai trò<input name="name" minLength={2} required placeholder="Ví dụ: Quản lý kho" /></label><label>Mã vai trò<input name="code" minLength={2} required placeholder="WAREHOUSE_MANAGER" /></label><button disabled={Boolean(busy)}>{busy === 'create-role' ? 'Đang tạo…' : 'Tạo vai trò'}</button></div><div className="permission-groups">{Object.entries(groupedPermissions).map(([group, permissions]) => <fieldset key={group}><legend>{group}</legend>{permissions.map((permission) => <label key={permission.code}><input type="checkbox" name="permissions" value={permission.code} /> <span><b>{permission.name}</b><small>{permission.code}</small></span></label>)}</fieldset>)}</div></form>}
     {error && <p className="staff-message error">{error}</p>}{notice && <p className="staff-message notice">{notice}</p>}

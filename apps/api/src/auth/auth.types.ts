@@ -5,6 +5,7 @@ export interface AuthenticatedUser {
   displayName: string;
   permissions: string[];
   scopes: Array<{ type: string; id: string | null }>;
+  roleScopes: Array<{ type: string; id: string | null; permissions: string[] }>;
 }
 
 export interface AccessTokenPayload {
@@ -12,4 +13,3 @@ export interface AccessTokenPayload {
   organizationId: string;
   email: string;
 }
-

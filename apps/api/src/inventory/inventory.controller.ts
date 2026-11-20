@@ -8,19 +8,20 @@ import { AdjustInventoryDto } from './dto/adjust-inventory.dto';
 import { InspectQuarantineDto } from './dto/inspect-quarantine.dto';
 import { ListInventoryTransactionsDto } from './dto/list-inventory-transactions.dto';
 import { InventoryService } from './inventory.service';
+import { resolveDataScope } from '../auth/data-scope';
 
 @Controller('inventory')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class InventoryController {
   constructor(private readonly inventory: InventoryService) {}
   @Get('alerts') @RequirePermissions('inventory.read')
-  alerts(@CurrentUser() user: AuthenticatedUser) { return this.inventory.alerts(user.organizationId); }
+  alerts(@CurrentUser() user: AuthenticatedUser) { return this.inventory.alerts(user.organizationId, resolveDataScope(user, 'inventory.read')); }
   @Post('adjustments') @RequirePermissions('inventory.adjust')
-  adjust(@CurrentUser() user: AuthenticatedUser, @Body() input: AdjustInventoryDto) { return this.inventory.adjust(user.organizationId, user.id, input); }
+  adjust(@CurrentUser() user: AuthenticatedUser, @Body() input: AdjustInventoryDto) { return this.inventory.adjust(user.organizationId, user.id, input, resolveDataScope(user, 'inventory.adjust')); }
   @Get('quarantine') @RequirePermissions('inventory.read')
-  quarantine(@CurrentUser() user: AuthenticatedUser) { return this.inventory.quarantine(user.organizationId); }
+  quarantine(@CurrentUser() user: AuthenticatedUser) { return this.inventory.quarantine(user.organizationId, resolveDataScope(user, 'inventory.read')); }
   @Post('quarantine/inspect') @RequirePermissions('inventory.inspect_returns')
-  inspect(@CurrentUser() user: AuthenticatedUser, @Body() input: InspectQuarantineDto) { return this.inventory.inspectQuarantine(user.organizationId, user.id, input); }
+  inspect(@CurrentUser() user: AuthenticatedUser, @Body() input: InspectQuarantineDto) { return this.inventory.inspectQuarantine(user.organizationId, user.id, input, resolveDataScope(user, 'inventory.inspect_returns')); }
   @Get('transactions') @RequirePermissions('inventory.read')
-  transactions(@CurrentUser() user: AuthenticatedUser, @Query() query: ListInventoryTransactionsDto) { return this.inventory.transactions(user.organizationId, query); }
+  transactions(@CurrentUser() user: AuthenticatedUser, @Query() query: ListInventoryTransactionsDto) { return this.inventory.transactions(user.organizationId, query, resolveDataScope(user, 'inventory.read')); }
 }

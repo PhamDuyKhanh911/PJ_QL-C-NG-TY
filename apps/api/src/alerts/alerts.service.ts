@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ListAlertsDto } from './dto/list-alerts.dto';
+import { channelScopeWhere, DataScope, orderScopeWhere, warehouseScopeWhere } from '../auth/data-scope';
 
 type Severity = 'CRITICAL' | 'WARNING' | 'INFO';
 type AlertType = 'INVENTORY' | 'RECONCILIATION' | 'INTEGRATION' | 'CONNECTION' | 'RETURN';
@@ -21,34 +22,34 @@ type AlertItem = {
 export class AlertsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async list(organizationId: string, query: ListAlertsDto) {
+  async list(organizationId: string, query: ListAlertsDto, scope: DataScope) {
     const now = new Date();
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60_000);
     const tokenWarningAt = new Date(now.getTime() + 3 * 24 * 60 * 60_000);
 
     const [balances, reconciliations, failedSyncs, channels, returns] = await Promise.all([
       this.prisma.inventoryBalance.findMany({
-        where: { warehouse: { branch: { organizationId } } },
+        where: { warehouse: warehouseScopeWhere(organizationId, scope) },
         include: { warehouse: true, variant: { include: { product: true } } },
       }),
       this.prisma.channelInventoryReconciliation.findMany({
-        where: { channelAccount: { organizationId }, status: { in: ['MISMATCH', 'UNMAPPED'] } },
+        where: { channelAccount: channelScopeWhere(organizationId, scope), status: { in: ['MISMATCH', 'UNMAPPED'] } },
         include: { channelAccount: { select: { id: true, name: true } } },
         orderBy: { updatedAt: 'desc' },
       }),
       this.prisma.channelSyncRun.findMany({
-        where: { channelAccount: { organizationId }, status: 'FAILED', startedAt: { gte: sevenDaysAgo } },
+        where: { channelAccount: channelScopeWhere(organizationId, scope), status: 'FAILED', startedAt: { gte: sevenDaysAgo } },
         include: { channelAccount: { select: { id: true, name: true } } },
         orderBy: { startedAt: 'desc' },
         take: 200,
       }),
       this.prisma.salesChannelAccount.findMany({
-        where: { organizationId, active: true, type: { in: ['TIKTOK_SHOP', 'SHOPEE', 'FACEBOOK_MESSENGER'] } },
+        where: { AND: [channelScopeWhere(organizationId, scope)], active: true, type: { in: ['TIKTOK_SHOP', 'SHOPEE', 'FACEBOOK_MESSENGER'] } },
         include: { connection: true },
         orderBy: { name: 'asc' },
       }),
       this.prisma.afterSaleRequest.findMany({
-        where: { order: { channelAccount: { organizationId } }, status: { in: ['AWAITING_RETURN', 'LOST_IN_TRANSIT'] } },
+        where: { order: orderScopeWhere(organizationId, scope), status: { in: ['AWAITING_RETURN', 'LOST_IN_TRANSIT'] } },
         include: { order: { select: { orderNumber: true, channelAccount: { select: { name: true } } } } },
         orderBy: { createdAt: 'asc' },
       }),

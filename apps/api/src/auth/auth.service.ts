@@ -53,7 +53,11 @@ export class AuthService {
       displayName: user.displayName,
       permissions: [...permissions],
       scopes: user.roleAssignments.map((item) => ({ type: item.scopeType, id: item.scopeId })),
+      roleScopes: user.roleAssignments.map((item) => ({
+        type: item.scopeType,
+        id: item.scopeId,
+        permissions: Array.isArray(item.role.permissions) ? item.role.permissions.filter((permission): permission is string => typeof permission === 'string') : [],
+      })),
     };
   }
 }
-

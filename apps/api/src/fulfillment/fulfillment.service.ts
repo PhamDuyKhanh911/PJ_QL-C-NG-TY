@@ -4,14 +4,15 @@ import { queueInventorySync } from '../channels/queue-inventory-sync';
 import { PrismaService } from '../prisma/prisma.service';
 import { FulfillmentActionDto } from './dto/fulfillment-action.dto';
 import { BatchDispatchDto } from './dto/batch-dispatch.dto';
+import { DataScope, orderScopeWhere } from '../auth/data-scope';
 
 @Injectable()
 export class FulfillmentService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async list(organizationId: string) {
+  async list(organizationId: string, scope: DataScope) {
     const orders = await this.prisma.salesOrder.findMany({
-      where: { channelAccount: { organizationId }, status: { in: [OrderStatus.CONFIRMED, OrderStatus.PACKING, OrderStatus.SHIPPED] } },
+      where: { AND: [orderScopeWhere(organizationId, scope)], status: { in: [OrderStatus.CONFIRMED, OrderStatus.PACKING, OrderStatus.SHIPPED] } },
       include: { channelAccount: true, warehouse: true, customer: true, items: { include: { variant: { include: { product: true } } } }, fulfillmentEvents: { orderBy: { createdAt: 'asc' } } },
       orderBy: { orderedAt: 'asc' },
     });
@@ -25,8 +26,8 @@ export class FulfillmentService {
     return this.prisma.user.findMany({ where: { organizationId, active: true, id: { not: warehouseKeeperId } }, select: { id: true, displayName: true, email: true }, orderBy: { displayName: 'asc' } });
   }
 
-  async detail(organizationId: string, orderId: string) {
-    const order = await this.prisma.salesOrder.findFirst({ where: { id: orderId, channelAccount: { organizationId } }, include: { channelAccount: true, warehouse: { include: { branch: true } }, items: { include: { variant: { include: { product: true } } } }, fulfillmentEvents: { orderBy: { createdAt: 'asc' } } } });
+  async detail(organizationId: string, orderId: string, scope: DataScope) {
+    const order = await this.prisma.salesOrder.findFirst({ where: { AND: [{ id: orderId }, orderScopeWhere(organizationId, scope)] }, include: { channelAccount: true, warehouse: { include: { branch: true } }, items: { include: { variant: { include: { product: true } } } }, fulfillmentEvents: { orderBy: { createdAt: 'asc' } } } });
     if (!order) throw new NotFoundException('Không tìm thấy phiếu xuất');
     const userIds = [...new Set([...(order.responsibleUserId ? [order.responsibleUserId] : []), ...order.fulfillmentEvents.map((event) => event.performedById)])];
     const users = await this.prisma.user.findMany({ where: { organizationId, id: { in: userIds } }, select: { id: true, displayName: true, email: true } });
@@ -34,9 +35,9 @@ export class FulfillmentService {
     return { ...order, responsibleUser: order.responsibleUserId ? usersById.get(order.responsibleUserId) ?? null : null, fulfillmentEvents: order.fulfillmentEvents.map((event) => ({ ...event, performedBy: usersById.get(event.performedById) ?? null })) };
   }
 
-  async batchDetail(organizationId: string, batchCode: string) {
+  async batchDetail(organizationId: string, batchCode: string, scope: DataScope) {
     const events = await this.prisma.orderFulfillmentEvent.findMany({
-      where: { batchCode, order: { channelAccount: { organizationId } } },
+      where: { batchCode, order: orderScopeWhere(organizationId, scope) },
       include: {
         order: {
           include: {
@@ -89,14 +90,14 @@ export class FulfillmentService {
     };
   }
 
-  async batchDispatch(organizationId: string, warehouseKeeperId: string, input: BatchDispatchDto) {
+  async batchDispatch(organizationId: string, warehouseKeeperId: string, input: BatchDispatchDto, scope: DataScope) {
     const responsibleUser = await this.prisma.user.findFirst({ where: { id: input.responsibleUserId, organizationId, active: true }, select: { id: true, displayName: true, email: true } });
     if (!responsibleUser) throw new BadRequestException('Nhân viên nhận đóng gói không hợp lệ hoặc đã ngừng hoạt động');
     if (responsibleUser.id === warehouseKeeperId) throw new BadRequestException('Người nhận đóng gói phải khác thủ kho giao hàng');
     if (new Set(input.orderIds).size !== input.orderIds.length) throw new BadRequestException('Danh sách đơn bị trùng');
     const channel = await this.prisma.salesChannelAccount.findFirst({ where: { id: input.channelAccountId, organizationId, active: true } });
     if (!channel || channel.type === ChannelType.OFFLINE_STORE) throw new BadRequestException('Chỉ áp dụng xuất gộp cho gian hàng online');
-    const orders = await this.prisma.salesOrder.findMany({ where: { id: { in: input.orderIds }, channelAccountId: channel.id, status: OrderStatus.CONFIRMED }, include: { items: { include: { variant: true } } } });
+    const orders = await this.prisma.salesOrder.findMany({ where: { AND: [orderScopeWhere(organizationId, scope)], id: { in: input.orderIds }, channelAccountId: channel.id, status: OrderStatus.CONFIRMED }, include: { items: { include: { variant: true } } } });
     if (orders.length !== input.orderIds.length) throw new BadRequestException('Có đơn không còn ở trạng thái chờ xuất hoặc không thuộc cùng gian hàng');
     const warehouseIds = [...new Set(orders.map((order) => order.warehouseId))];
     if (warehouseIds.length !== 1 || !warehouseIds[0]) throw new BadRequestException('Các đơn trong lượt xuất phải thuộc cùng một kho');
@@ -125,8 +126,8 @@ export class FulfillmentService {
     });
   }
 
-  async dispatch(organizationId: string, warehouseKeeperId: string, orderId: string, input: FulfillmentActionDto) {
-    const order = await this.prisma.salesOrder.findFirst({ where: { id: orderId, channelAccount: { organizationId } }, include: { channelAccount: true, items: { include: { variant: true } } } });
+  async dispatch(organizationId: string, warehouseKeeperId: string, orderId: string, input: FulfillmentActionDto, scope: DataScope) {
+    const order = await this.prisma.salesOrder.findFirst({ where: { AND: [{ id: orderId }, orderScopeWhere(organizationId, scope)] }, include: { channelAccount: true, items: { include: { variant: true } } } });
     if (!order || !order.warehouseId) throw new NotFoundException('Không tìm thấy đơn hoặc đơn chưa được phân kho');
     if (order.status !== OrderStatus.CONFIRMED) throw new BadRequestException('Chỉ đơn đã xác nhận và chưa xuất mới được xuất kho');
     const offline = order.channelAccount.type === ChannelType.OFFLINE_STORE;

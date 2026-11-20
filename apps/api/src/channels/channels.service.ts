@@ -6,6 +6,7 @@ import { ChannelTokenService } from './channel-token.service';
 import { ChannelOAuthService } from './channel-oauth.service';
 import { UpdateChannelConnectionDto } from './dto/update-channel-connection.dto';
 import { ChannelInventoryPushService } from './channel-inventory-push.service';
+import { channelScopeWhere, DataScope, warehouseScopeWhere } from '../auth/data-scope';
 
 @Injectable()
 export class ChannelsService {
@@ -17,17 +18,17 @@ export class ChannelsService {
     private readonly inventoryPush: ChannelInventoryPushService,
   ) {}
 
-  async list(organizationId: string) {
+  async list(organizationId: string, scope: DataScope) {
     const [channels, warehouses] = await Promise.all([this.prisma.salesChannelAccount.findMany({
-      where: { organizationId },
+      where: channelScopeWhere(organizationId, scope),
       include: {
         connection: true,
-        skuMappings: { include: { variant: { include: { balances: true, product: { select: { active: true } } } } } },
+        skuMappings: { include: { variant: { include: { balances: { where: { warehouse: warehouseScopeWhere(organizationId, scope) } }, product: { select: { active: true } } } } } },
         syncRuns: { orderBy: { startedAt: 'desc' }, take: 5 },
         _count: { select: { orders: true, conversations: true, inventoryReconciliations: { where: { status: { in: ['MISMATCH', 'UNMAPPED'] } } } } },
       },
       orderBy: [{ type: 'asc' }, { name: 'asc' }],
-    }), this.prisma.warehouse.findMany({ where: { branch: { organizationId } }, select: { id: true, code: true, name: true, branch: { select: { name: true } } }, orderBy: { name: 'asc' } })]);
+    }), this.prisma.warehouse.findMany({ where: warehouseScopeWhere(organizationId, scope), select: { id: true, code: true, name: true, branch: { select: { name: true } } }, orderBy: { name: 'asc' } })]);
     return channels.map((channel) => ({
       id: channel.id,
       code: channel.code,
@@ -163,21 +164,21 @@ export class ChannelsService {
     return this.prisma.channelSyncRun.update({ where: { id: run.id }, data: { status: ChannelSyncStatus.SUCCEEDED, processedCount: snapshot.length, completedAt: new Date() } });
   }
 
-  async syncSummary(organizationId: string) {
+  async syncSummary(organizationId: string, scope: DataScope) {
     const staleBefore = new Date(Date.now() - 15 * 60_000); const today = new Date(); today.setHours(0, 0, 0, 0);
     const [pending, stale, failed, succeededToday] = await Promise.all([
-      this.prisma.channelSyncRun.count({ where: { channelAccount: { organizationId }, status: ChannelSyncStatus.RUNNING } }),
-      this.prisma.channelSyncRun.count({ where: { channelAccount: { organizationId }, status: ChannelSyncStatus.RUNNING, startedAt: { lt: staleBefore } } }),
-      this.prisma.channelSyncRun.count({ where: { channelAccount: { organizationId }, status: ChannelSyncStatus.FAILED } }),
-      this.prisma.channelSyncRun.count({ where: { channelAccount: { organizationId }, status: ChannelSyncStatus.SUCCEEDED, completedAt: { gte: today } } }),
+      this.prisma.channelSyncRun.count({ where: { channelAccount: channelScopeWhere(organizationId, scope), status: ChannelSyncStatus.RUNNING } }),
+      this.prisma.channelSyncRun.count({ where: { channelAccount: channelScopeWhere(organizationId, scope), status: ChannelSyncStatus.RUNNING, startedAt: { lt: staleBefore } } }),
+      this.prisma.channelSyncRun.count({ where: { channelAccount: channelScopeWhere(organizationId, scope), status: ChannelSyncStatus.FAILED } }),
+      this.prisma.channelSyncRun.count({ where: { channelAccount: channelScopeWhere(organizationId, scope), status: ChannelSyncStatus.SUCCEEDED, completedAt: { gte: today } } }),
     ]);
     return { pending, stale, failed, succeededToday };
   }
 
-  async inventoryReconciliation(organizationId: string, requestedStatus?: string) {
+  async inventoryReconciliation(organizationId: string, scope: DataScope, requestedStatus?: string) {
     const allowedStatuses = ['MATCHED', 'MISMATCH', 'UNMAPPED'];
     const status = requestedStatus?.toUpperCase();
-    const baseWhere = { channelAccount: { organizationId } };
+    const baseWhere = { channelAccount: channelScopeWhere(organizationId, scope) };
     const where = status && allowedStatuses.includes(status) ? { ...baseWhere, status } : baseWhere;
     const [rows, matched, mismatch, unmapped] = await Promise.all([
       this.prisma.channelInventoryReconciliation.findMany({
@@ -217,9 +218,9 @@ export class ChannelsService {
     };
   }
 
-  async resyncInventoryReconciliation(organizationId: string, userId: string, reconciliationId: string) {
+  async resyncInventoryReconciliation(organizationId: string, userId: string, reconciliationId: string, scope: DataScope) {
     const reconciliation = await this.prisma.channelInventoryReconciliation.findFirst({
-      where: { id: reconciliationId, channelAccount: { organizationId } },
+      where: { id: reconciliationId, channelAccount: channelScopeWhere(organizationId, scope) },
       include: { channelAccount: { include: { connection: true } } },
     });
     if (!reconciliation) throw new NotFoundException('Không tìm thấy cảnh báo chênh lệch tồn kho');
