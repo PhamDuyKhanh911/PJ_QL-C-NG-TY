@@ -543,6 +543,23 @@ model AuditEvent {
   @@index([actorId, createdAt])
 }
 
+model AlertWorkflow {
+  id                String   @id @default(cuid())
+  organizationId    String
+  alertKey          String
+  sourceFingerprint String
+  status            String   @default("OPEN")
+  assignedUserId    String?
+  resolutionNote    String?
+  resolvedById      String?
+  resolvedAt        DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  @@unique([organizationId, alertKey])
+  @@index([organizationId, status, updatedAt])
+  @@index([assignedUserId, status])
+}
+
 model Conversation {
   id                 String @id @default(cuid())
   channelAccountId   String

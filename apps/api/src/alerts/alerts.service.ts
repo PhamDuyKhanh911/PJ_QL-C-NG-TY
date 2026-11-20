@@ -1,10 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ListAlertsDto } from './dto/list-alerts.dto';
 import { channelScopeWhere, DataScope, orderScopeWhere, warehouseScopeWhere } from '../auth/data-scope';
+import { UpdateAlertStatusDto } from './dto/update-alert-status.dto';
 
 type Severity = 'CRITICAL' | 'WARNING' | 'INFO';
 type AlertType = 'INVENTORY' | 'RECONCILIATION' | 'INTEGRATION' | 'CONNECTION' | 'RETURN';
+type WorkflowStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED';
 type AlertItem = {
   id: string;
   type: AlertType;
@@ -16,6 +18,7 @@ type AlertItem = {
   ownerLabel: string;
   actionLabel: string;
   href: string;
+  sourceFingerprint: string;
 };
 
 @Injectable()
@@ -71,6 +74,7 @@ export class AlertsService {
         ownerLabel: 'Thủ kho / mua hàng',
         actionLabel: 'Kiểm tra tồn kho',
         href: `/inventory?search=${encodeURIComponent(balance.variant.sku)}`,
+        sourceFingerprint: [balance.onHand, balance.reserved, balance.quarantined, balance.safetyStock, balance.reorderPoint].join(':'),
       });
     }
 
@@ -93,6 +97,7 @@ export class AlertsService {
         ownerLabel: 'Quản lý bán online',
         actionLabel: unmapped ? 'Ánh xạ SKU' : 'Đối chiếu tồn',
         href: `/inventory/channel-reconciliation?status=${first.status}`,
+        sourceFingerprint: group.map((item) => `${item.id}:${item.updatedAt.toISOString()}:${item.difference}`).sort().join('|'),
       });
     }
 
@@ -113,6 +118,7 @@ export class AlertsService {
         ownerLabel: 'Quản lý tích hợp',
         actionLabel: 'Xem lỗi đồng bộ',
         href: '/integrations',
+        sourceFingerprint: run.id,
       });
     }
 
@@ -139,6 +145,7 @@ export class AlertsService {
         ownerLabel: 'Quản trị kênh bán',
         actionLabel: 'Mở cấu hình seller',
         href: '/channels',
+        sourceFingerprint: connection ? `${connection.updatedAt.toISOString()}:${connection.status}:${connection.tokenRefreshStatus}` : 'CONNECTION_MISSING',
       });
     }
 
@@ -156,31 +163,102 @@ export class AlertsService {
         ownerLabel: 'Thủ kho / vận chuyển',
         actionLabel: 'Theo dõi hàng hoàn',
         href: '/after-sales',
+        sourceFingerprint: `${item.status}:${item.createdAt.toISOString()}:${item.quantity}`,
       });
     }
 
     const rank: Record<Severity, number> = { CRITICAL: 0, WARNING: 1, INFO: 2 };
     alerts.sort((a, b) => rank[a.severity] - rank[b.severity] || b.occurredAt.getTime() - a.occurredAt.getTime());
+    const workflows = await this.prisma.alertWorkflow.findMany({ where: { organizationId, alertKey: { in: alerts.map((item) => item.id) } } });
+    const workflowByKey = new Map(workflows.map((workflow) => [workflow.alertKey, workflow]));
+    const assignedUserIds = [...new Set(workflows.map((workflow) => workflow.assignedUserId).filter((id): id is string => Boolean(id)))];
+    const assignedUsers = await this.prisma.user.findMany({ where: { organizationId, id: { in: assignedUserIds } }, select: { id: true, displayName: true, email: true } });
+    const userById = new Map(assignedUsers.map((user) => [user.id, user]));
+    const enriched = alerts.map((item) => {
+      const saved = workflowByKey.get(item.id);
+      const current = saved?.sourceFingerprint === item.sourceFingerprint ? saved : null;
+      const status = (current?.status ?? 'OPEN') as WorkflowStatus;
+      return {
+        ...item,
+        status,
+        assignedTo: current?.assignedUserId ? userById.get(current.assignedUserId) ?? null : null,
+        resolutionNote: current?.resolutionNote ?? null,
+        workflowUpdatedAt: current?.updatedAt ?? null,
+      };
+    });
     const search = query.search?.trim().toLocaleLowerCase('vi-VN');
-    const items = alerts.filter((item) =>
+    const requestedStatus = query.status ?? 'ACTIVE';
+    const items = enriched.filter((item) =>
       (query.severity === 'ALL' || item.severity === query.severity)
       && (query.type === 'ALL' || item.type === query.type)
+      && (requestedStatus === 'ALL' || (requestedStatus === 'ACTIVE' ? item.status !== 'RESOLVED' : item.status === requestedStatus))
       && (!search || `${item.title} ${item.detail} ${item.ownerLabel}`.toLocaleLowerCase('vi-VN').includes(search)),
     );
 
     return {
       generatedAt: now,
       summary: {
-        total: alerts.length,
-        critical: alerts.filter((item) => item.severity === 'CRITICAL').length,
-        warning: alerts.filter((item) => item.severity === 'WARNING').length,
-        inventory: alerts.filter((item) => item.type === 'INVENTORY').length,
-        seller: alerts.filter((item) => ['RECONCILIATION', 'INTEGRATION', 'CONNECTION'].includes(item.type)).length,
-        returns: alerts.filter((item) => item.type === 'RETURN').length,
+        total: enriched.length,
+        critical: enriched.filter((item) => item.severity === 'CRITICAL' && item.status !== 'RESOLVED').length,
+        warning: enriched.filter((item) => item.severity === 'WARNING' && item.status !== 'RESOLVED').length,
+        inventory: enriched.filter((item) => item.type === 'INVENTORY' && item.status !== 'RESOLVED').length,
+        seller: enriched.filter((item) => ['RECONCILIATION', 'INTEGRATION', 'CONNECTION'].includes(item.type) && item.status !== 'RESOLVED').length,
+        returns: enriched.filter((item) => item.type === 'RETURN' && item.status !== 'RESOLVED').length,
+        open: enriched.filter((item) => item.status === 'OPEN').length,
+        inProgress: enriched.filter((item) => item.status === 'IN_PROGRESS').length,
+        resolved: enriched.filter((item) => item.status === 'RESOLVED').length,
       },
-      appliedFilters: { severity: query.severity, type: query.type, search: query.search ?? '' },
+      appliedFilters: { severity: query.severity, type: query.type, status: requestedStatus, search: query.search ?? '' },
       items,
     };
+  }
+
+  async updateStatus(organizationId: string, userId: string, alertId: string, input: UpdateAlertStatusDto, scope: DataScope) {
+    const snapshot = await this.list(organizationId, { severity: 'ALL', type: 'ALL', status: 'ALL' }, scope);
+    const alert = snapshot.items.find((item) => item.id === alertId);
+    if (!alert) throw new NotFoundException('Cảnh báo không còn tồn tại hoặc nằm ngoài phạm vi được giao');
+    const note = input.note?.trim() || null;
+    const previous = await this.prisma.alertWorkflow.findUnique({ where: { organizationId_alertKey: { organizationId, alertKey: alertId } } });
+    const assignedUserId = input.status === 'OPEN' ? null : input.status === 'IN_PROGRESS' ? userId : previous?.assignedUserId ?? userId;
+    const resolved = input.status === 'RESOLVED';
+    const workflow = await this.prisma.$transaction(async (tx) => {
+      const saved = await tx.alertWorkflow.upsert({
+        where: { organizationId_alertKey: { organizationId, alertKey: alertId } },
+        create: {
+          organizationId,
+          alertKey: alertId,
+          sourceFingerprint: alert.sourceFingerprint,
+          status: input.status,
+          assignedUserId,
+          resolutionNote: resolved ? note : null,
+          resolvedById: resolved ? userId : null,
+          resolvedAt: resolved ? new Date() : null,
+        },
+        update: {
+          sourceFingerprint: alert.sourceFingerprint,
+          status: input.status,
+          assignedUserId,
+          resolutionNote: resolved ? note : null,
+          resolvedById: resolved ? userId : null,
+          resolvedAt: resolved ? new Date() : null,
+        },
+      });
+      await tx.auditEvent.create({ data: {
+        organizationId,
+        actorId: userId,
+        category: 'ALERT',
+        action: `ALERT_${input.status}`,
+        entityType: 'ALERT',
+        entityId: alertId,
+        summary: `${input.status === 'IN_PROGRESS' ? 'Nhận xử lý' : input.status === 'RESOLVED' ? 'Hoàn tất' : 'Mở lại'} cảnh báo ${alert.title}`,
+        metadata: { type: alert.type, severity: alert.severity, note: note ?? '' },
+      } });
+      return saved;
+    });
+    const assignedTo = workflow.assignedUserId
+      ? await this.prisma.user.findFirst({ where: { id: workflow.assignedUserId, organizationId }, select: { id: true, displayName: true, email: true } })
+      : null;
+    return { alertId, status: workflow.status, assignedTo, resolutionNote: workflow.resolutionNote, updatedAt: workflow.updatedAt };
   }
 
   private directionLabel(direction: string) {

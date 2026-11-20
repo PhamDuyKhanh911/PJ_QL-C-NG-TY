@@ -33,4 +33,5 @@ export const PERMISSION_CATALOG = [
   { code: 'backups.manage', group: 'Sao lưu dữ liệu', name: 'Tạo, kiểm tra và tải bản sao lưu toàn hệ thống' },
   { code: 'activity.read', group: 'Kiểm soát', name: 'Xem nhật ký hoạt động và người chịu trách nhiệm' },
   { code: 'alerts.read', group: 'Kiểm soát', name: 'Xem cảnh báo vận hành tập trung' },
+  { code: 'alerts.manage', group: 'Kiểm soát', name: 'Nhận và hoàn tất cảnh báo vận hành' },
 ] as const;

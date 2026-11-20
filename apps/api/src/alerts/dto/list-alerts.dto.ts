@@ -12,4 +12,8 @@ export class ListAlertsDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  @IsOptional()
+  @IsIn(['ACTIVE', 'ALL', 'OPEN', 'IN_PROGRESS', 'RESOLVED'])
+  status = 'ACTIVE';
 }
