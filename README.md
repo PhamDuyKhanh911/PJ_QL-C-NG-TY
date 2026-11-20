@@ -29,6 +29,22 @@ pnpm dev
 - API: http://localhost:4000/api
 - Health check: http://localhost:4000/api/health
 
+### Sao lưu và chuyển dữ liệu
+
+Tài khoản chủ doanh nghiệp có thể mở `/backups` để tạo, kiểm tra và tải bản sao lưu toàn bộ PostgreSQL. Bản sao lưu local nằm trong `.data/backups` và không được đưa lên Git.
+
+Khi chuyển sang máy chủ mới, chỉ khôi phục vào một cơ sở dữ liệu trống. Công cụ sẽ từ chối ghi đè nếu phát hiện bảng dữ liệu đã tồn tại:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\restore-backup.ps1 `
+  -BackupFile .\enterprise-YYYYMMDD-HHMMSS-xxxxxx.dump `
+  -TargetDatabase enterprise_management_new `
+  -ConfirmTargetDatabase enterprise_management_new `
+  -HostName localhost -Username erp -Password change_me
+```
+
+Sau khi khôi phục, cần đối chiếu số đơn hàng, tồn kho và khách hàng trước khi đổi kết nối ứng dụng sang cơ sở dữ liệu mới.
+
 ### Môi trường portable trên Windows
 
 Máy phát triển có thể chạy Node.js và PostgreSQL trực tiếp trong thư mục dự án, không cần quyền quản trị:

@@ -30,4 +30,5 @@ export const PERMISSION_CATALOG = [
   { code: 'fulfillment.dispatch', group: 'Xuất kho', name: 'Thủ kho xác nhận xuất và chịu trách nhiệm bàn giao' },
   { code: 'reconciliation.read', group: 'Đối soát', name: 'Xem doanh thu, phí và tiền thực nhận' },
   { code: 'reconciliation.sync', group: 'Đối soát', name: 'Đồng bộ dữ liệu thanh toán từ kênh bán' },
+  { code: 'backups.manage', group: 'Sao lưu dữ liệu', name: 'Tạo, kiểm tra và tải bản sao lưu toàn hệ thống' },
 ] as const;

@@ -26,6 +26,8 @@ $env:CHANNEL_CREDENTIAL_KEY = 'local-channel-credential-key-change-before-produc
 $env:WEB_ORIGIN = 'http://localhost:3000'
 $env:API_PUBLIC_URL = 'http://localhost:4000'
 $env:NEXT_PUBLIC_API_URL = 'http://localhost:4000/api'
+$env:POSTGRES_BIN = Join-Path $PostgresRoot 'bin'
+$env:BACKUP_DIR = Join-Path $DataRoot 'backups'
 
 & (Join-Path $PostgresRoot 'bin\pg_isready.exe') -h localhost -p 5432 *> $null
 if ($LASTEXITCODE -ne 0) {

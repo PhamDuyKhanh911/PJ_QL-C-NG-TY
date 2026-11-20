@@ -17,6 +17,7 @@ import { ReportsModule } from './reports/reports.module';
 import { PurchasingModule } from './purchasing/purchasing.module';
 import { FulfillmentModule } from './fulfillment/fulfillment.module';
 import { ReconciliationModule } from './reconciliation/reconciliation.module';
+import { BackupsModule } from './backups/backups.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { ReconciliationModule } from './reconciliation/reconciliation.module';
     PurchasingModule,
     FulfillmentModule,
     ReconciliationModule,
+    BackupsModule,
   ],
   controllers: [HealthController],
 })
