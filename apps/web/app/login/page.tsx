@@ -6,8 +6,9 @@ import './login.css';
 
 export default function LoginPage() {
   const router = useRouter();
-  const [email, setEmail] = useState('admin@local.test');
-  const [password, setPassword] = useState('Admin@123456');
+  const demoLoginEnabled = process.env.NEXT_PUBLIC_ENABLE_DEMO_LOGIN === 'true';
+  const [email, setEmail] = useState(demoLoginEnabled ? 'admin@local.test' : '');
+  const [password, setPassword] = useState(demoLoginEnabled ? 'Admin@123456' : '');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -49,7 +50,7 @@ export default function LoginPage() {
           <label>Mật khẩu<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" minLength={8} required /></label>
           {error && <p className="login-error">{error}</p>}
           <button type="submit" disabled={loading}>{loading ? 'Đang đăng nhập…' : 'Đăng nhập'}</button>
-          <small>Tài khoản mẫu chỉ dành cho môi trường phát triển local.</small>
+          {demoLoginEnabled && <small>Tài khoản mẫu chỉ dành cho môi trường phát triển local.</small>}
         </form>
       </section>
     </main>
