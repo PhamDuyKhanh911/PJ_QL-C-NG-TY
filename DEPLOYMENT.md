@@ -4,6 +4,14 @@ Hệ thống được đóng gói cho Linux VPS bằng Docker Compose. Bộ prod
 
 Tên dự án Docker Compose được cố định là `qlseller`, vì vậy container, network và volume dữ liệu không bị đổi tên theo thư mục cài đặt.
 
+## Bản kiểm thử miễn phí trên Render
+
+Tệp `render.yaml` tạo một Web Service `qlseller` và một PostgreSQL `qlseller-db`, đều dùng gói miễn phí tại Singapore. Web Next.js chuyển tiếp `/api/*` nội bộ đến API NestJS nên chỉ tiêu thụ một Web Service và nằm trong hạn mức 750 giờ miễn phí mỗi tháng.
+
+Tạo Blueprint từ repository GitHub rồi chờ health check `/api/health` thành công. Render tự sinh JWT, khóa mã hóa credential và mật khẩu quản trị. Đăng nhập bằng `phamduykhanh911@gmail.com`; mật khẩu ban đầu xem tại biến `BOOTSTRAP_ADMIN_PASSWORD` trong trang Environment của dịch vụ.
+
+Đây chỉ là môi trường kiểm thử: dịch vụ ngủ sau 15 phút không có truy cập và PostgreSQL miễn phí hết hạn sau 30 ngày. Tạo sao lưu tại `/backups` trước khi cơ sở dữ liệu hết hạn hoặc chuyển `DATABASE_URL` sang PostgreSQL lâu dài.
+
 ## 1. Máy chủ miễn phí được chọn
 
 Oracle Cloud Always Free phù hợp nhất với cấu trúc hiện tại vì cho phép chạy cả Docker Compose và lưu PostgreSQL trên ổ đĩa lâu dài. Khi tạo máy ảo, chọn Ubuntu 24.04, kiến trúc Ampere A1, cấp 2 OCPU, 12 GB RAM và mở cổng TCP `80`, `443` trong Security List/Network Security Group.
