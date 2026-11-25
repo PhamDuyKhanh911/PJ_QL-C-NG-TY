@@ -11,6 +11,6 @@ import { resolveDataScope } from '../auth/data-scope';
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class DashboardController {
   constructor(private readonly dashboard: DashboardService) {}
-  @Get('summary') @RequirePermissions('organization.read')
-  summary(@CurrentUser() user: AuthenticatedUser) { return this.dashboard.summary(user.organizationId, resolveDataScope(user, 'organization.read')); }
+  @Get('summary') @RequirePermissions('dashboard.read')
+  summary(@CurrentUser() user: AuthenticatedUser) { return this.dashboard.summary(user.organizationId, user.id, resolveDataScope(user, 'dashboard.read')); }
 }

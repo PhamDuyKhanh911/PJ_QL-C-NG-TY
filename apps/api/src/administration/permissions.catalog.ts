@@ -1,4 +1,5 @@
 export const PERMISSION_CATALOG = [
+  { code: 'dashboard.read', group: 'Tổng quan', name: 'Xem dashboard theo phạm vi được giao' },
   { code: 'organization.read', group: 'Tổ chức', name: 'Xem cơ cấu doanh nghiệp' },
   { code: 'users.read', group: 'Nhân viên', name: 'Xem nhân viên và vai trò' },
   { code: 'users.manage', group: 'Nhân viên', name: 'Tạo và cập nhật nhân viên' },

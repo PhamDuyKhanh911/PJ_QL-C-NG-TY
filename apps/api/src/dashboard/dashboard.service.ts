@@ -2,12 +2,13 @@ import { Injectable } from '@nestjs/common';
 import { OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { channelScopeWhere, DataScope, orderScopeWhere, warehouseScopeWhere } from '../auth/data-scope';
+import { AlertsService } from '../alerts/alerts.service';
 
 @Injectable()
 export class DashboardService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly alertsService: AlertsService) {}
 
-  async summary(organizationId: string, scope: DataScope) {
+  async summary(organizationId: string, userId: string, scope: DataScope) {
     const now = new Date();
     const today = new Date(now); today.setHours(0, 0, 0, 0);
     const thirtyDaysAgo = new Date(now); thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
@@ -60,21 +61,27 @@ export class DashboardService {
       };
     });
 
-    const alerts = [
-      ...(lowStock.length ? [{ type: 'LOW_STOCK', severity: 'CRITICAL', title: `${lowStock.length} SKU sắp hết hàng`, detail: 'Tồn có thể bán đã xuống dưới điểm đặt hàng lại' }] : []),
-      ...(inventoryMismatches ? [{ type: 'INVENTORY_MISMATCH', severity: 'CRITICAL', title: `${inventoryMismatches} SKU lệch tồn trên sàn`, detail: 'Tồn có thể bán trong ERP khác ảnh chụp mới nhất từ seller' }] : []),
-      ...(unmappedChannelSkus ? [{ type: 'UNMAPPED_CHANNEL_SKU', severity: 'WARNING', title: `${unmappedChannelSkus} SKU sàn chưa được ghép`, detail: 'Cần ánh xạ SKU trước khi hệ thống có thể đối chiếu và đồng bộ' }] : []),
-      ...(conversations.length ? [{ type: 'UNREPLIED', severity: 'WARNING', title: `${conversations.length} hội thoại cần phản hồi`, detail: 'Bao gồm tin chưa đọc và chưa trả lời' }] : []),
-      ...(processingOrders ? [{ type: 'PROCESSING_ORDERS', severity: 'INFO', title: `${processingOrders} đơn đang xử lý`, detail: 'Đơn chờ xác nhận, đóng gói hoặc đang giao' }] : []),
-      ...(pendingSyncs ? [{ type: 'PENDING_SYNCS', severity: staleSyncs ? 'CRITICAL' : 'INFO', title: `${pendingSyncs} tác vụ đồng bộ tồn đang chờ`, detail: staleSyncs ? `${staleSyncs} tác vụ đã chờ quá 15 phút, cần kiểm tra kết nối kênh` : 'Tác vụ được tạo tự động sau biến động tồn kho' }] : []),
-    ];
+    const alertResult = await this.alertsService.list(organizationId, { severity: 'ALL', type: 'ALL', status: 'ACTIVE' }, scope, userId);
+    const workflowAlerts = alertResult.items.slice(0, 6).map((item) => ({
+      id: item.id,
+      type: item.type,
+      severity: item.severity,
+      title: item.title,
+      detail: item.detail,
+      href: item.href,
+      status: item.status,
+      assignedTo: item.assignedTo,
+      isOverdue: item.isOverdue,
+      isMine: item.isMine,
+    }));
 
     return {
       generatedAt: now,
       stats: { todayRevenue, processingOrders, unrepliedConversations: conversations.length, lowStockSkus: lowStock.length, pendingSyncs, staleSyncs, inventoryMismatches, unmappedChannelSkus },
       revenueByDay,
       channelPerformance,
-      alerts,
+      alerts: workflowAlerts,
+      work: alertResult.summary,
       lowStock: lowStock.slice(0, 10),
     };
   }

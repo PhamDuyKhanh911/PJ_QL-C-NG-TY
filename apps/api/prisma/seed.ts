@@ -47,6 +47,7 @@ async function main() {
     { code: 'REPORT_VIEWER', name: 'Nhân viên báo cáo', permissions: ['organization.read', 'inventory.read', 'sales.read', 'reports.sales', 'reconciliation.read', 'activity.read', 'alerts.read'] },
     { code: 'PURCHASING_STAFF', name: 'Nhân viên mua hàng', permissions: ['catalog.read', 'inventory.read', 'purchasing.read', 'purchasing.manage'] },
   ];
+  for (const item of defaultRoles) if (!item.permissions.includes('dashboard.read')) item.permissions.push('dashboard.read');
   const seededRoles = new Map<string, { id: string }>();
   for (const item of defaultRoles) {
     const seededRole = await prisma.role.upsert({

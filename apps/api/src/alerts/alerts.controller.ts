@@ -17,7 +17,7 @@ export class AlertsController {
   @Get()
   @RequirePermissions('alerts.read')
   list(@CurrentUser() user: AuthenticatedUser, @Query() query: ListAlertsDto) {
-    return this.alerts.list(user.organizationId, query, resolveDataScope(user, 'alerts.read'));
+    return this.alerts.list(user.organizationId, query, resolveDataScope(user, 'alerts.read'), user.id);
   }
 
   @Patch(':alertId/status')

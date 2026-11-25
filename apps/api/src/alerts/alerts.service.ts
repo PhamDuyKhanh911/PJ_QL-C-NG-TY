@@ -25,7 +25,7 @@ type AlertItem = {
 export class AlertsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async list(organizationId: string, query: ListAlertsDto, scope: DataScope) {
+  async list(organizationId: string, query: ListAlertsDto, scope: DataScope, currentUserId?: string) {
     const now = new Date();
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60_000);
     const tokenWarningAt = new Date(now.getTime() + 3 * 24 * 60 * 60_000);
@@ -178,14 +178,21 @@ export class AlertsService {
       const saved = workflowByKey.get(item.id);
       const current = saved?.sourceFingerprint === item.sourceFingerprint ? saved : null;
       const status = (current?.status ?? 'OPEN') as WorkflowStatus;
+      const slaHours = item.severity === 'CRITICAL' ? 4 : item.severity === 'WARNING' ? 24 : 48;
+      const isOverdue = status === 'IN_PROGRESS' && Boolean(current && current.updatedAt.getTime() < now.getTime() - slaHours * 60 * 60_000);
       return {
         ...item,
+        severity: isOverdue ? 'CRITICAL' as const : item.severity,
         status,
         assignedTo: current?.assignedUserId ? userById.get(current.assignedUserId) ?? null : null,
         resolutionNote: current?.resolutionNote ?? null,
         workflowUpdatedAt: current?.updatedAt ?? null,
+        isOverdue,
+        slaHours,
+        isMine: Boolean(currentUserId && current?.assignedUserId === currentUserId),
       };
     });
+    enriched.sort((a, b) => Number(b.isOverdue) - Number(a.isOverdue) || rank[a.severity] - rank[b.severity] || b.occurredAt.getTime() - a.occurredAt.getTime());
     const search = query.search?.trim().toLocaleLowerCase('vi-VN');
     const requestedStatus = query.status ?? 'ACTIVE';
     const items = enriched.filter((item) =>
@@ -207,6 +214,8 @@ export class AlertsService {
         open: enriched.filter((item) => item.status === 'OPEN').length,
         inProgress: enriched.filter((item) => item.status === 'IN_PROGRESS').length,
         resolved: enriched.filter((item) => item.status === 'RESOLVED').length,
+        overdue: enriched.filter((item) => item.isOverdue).length,
+        mine: enriched.filter((item) => item.isMine && item.status !== 'RESOLVED').length,
       },
       appliedFilters: { severity: query.severity, type: query.type, status: requestedStatus, search: query.search ?? '' },
       items,
@@ -214,7 +223,7 @@ export class AlertsService {
   }
 
   async updateStatus(organizationId: string, userId: string, alertId: string, input: UpdateAlertStatusDto, scope: DataScope) {
-    const snapshot = await this.list(organizationId, { severity: 'ALL', type: 'ALL', status: 'ALL' }, scope);
+    const snapshot = await this.list(organizationId, { severity: 'ALL', type: 'ALL', status: 'ALL' }, scope, userId);
     const alert = snapshot.items.find((item) => item.id === alertId);
     if (!alert) throw new NotFoundException('Cảnh báo không còn tồn tại hoặc nằm ngoài phạm vi được giao');
     const note = input.note?.trim() || null;

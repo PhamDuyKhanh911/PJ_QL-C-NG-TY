@@ -44,6 +44,8 @@
 .workflow-status.in_progress { background: #fff0df; color: #a96620; }
 .workflow-status.resolved { background: #e8f7f1; color: #16845b; }
 .resolution-note { display: block !important; margin-top: 6px; color: #667186 !important; font-size: 10px !important; line-height: 1.35; }
+.alert-body small.overdue-tag { background: #fde9e9; color: #ac3737; }
+.alerts-list article:has(.overdue-tag) { background: #fffafa; }
 
 @media (max-width: 1050px) {
   .alerts-filters { grid-template-columns: repeat(2, 1fr); }

@@ -1,0 +1,13 @@
+.alerts .panel-title > a {
+  color: #3157d5;
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.alerts .alert.overdue {
+  border: 1px solid #e7a4a4;
+  box-shadow: 0 0 0 2px #fff0f0;
+}
+
+.alerts .alert b { line-height: 1.35; }
