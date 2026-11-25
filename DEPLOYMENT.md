@@ -1,15 +1,30 @@
-# Triển khai production
+# Triển khai QL Seller
 
 Hệ thống được đóng gói cho Linux VPS bằng Docker Compose. Bộ production gồm PostgreSQL, Redis, API NestJS, Web Next.js và Nginx reverse proxy. PostgreSQL và Redis chỉ nằm trong mạng nội bộ Docker; cổng công khai duy nhất là HTTP `80`.
 
-## 1. Chuẩn bị máy chủ
+Tên dự án Docker Compose được cố định là `qlseller`, vì vậy container, network và volume dữ liệu không bị đổi tên theo thư mục cài đặt.
+
+## 1. Máy chủ miễn phí được chọn
+
+Oracle Cloud Always Free phù hợp nhất với cấu trúc hiện tại vì cho phép chạy cả Docker Compose và lưu PostgreSQL trên ổ đĩa lâu dài. Khi tạo máy ảo, chọn Ubuntu 24.04, kiến trúc Ampere A1, cấp 2 OCPU, 12 GB RAM và mở cổng TCP `80`, `443` trong Security List/Network Security Group.
+
+Trên máy ảo mới, cài Docker bằng script đi kèm:
+
+```bash
+git clone https://github.com/PhamDuyKhanh911/PJ_QL-C-NG-TY.git qlseller
+cd qlseller
+chmod +x scripts/*.sh
+./scripts/provision-ubuntu.sh
+```
+
+## 2. Chuẩn bị máy chủ khác
 
 - Ubuntu 22.04/24.04 hoặc Linux tương đương.
 - Docker Engine và Docker Compose plugin.
 - Tối thiểu 2 CPU, 4 GB RAM và 30 GB SSD.
 - Trỏ tên miền về IP máy chủ. Nên đặt HTTPS phía trước bằng Cloudflare hoặc reverse proxy TLS của nhà cung cấp.
 
-## 2. Sinh cấu hình bí mật
+## 3. Sinh cấu hình bí mật
 
 Trên máy quản trị, tại thư mục dự án:
 
@@ -29,7 +44,15 @@ Kiểm tra trước khi triển khai:
 powershell -ExecutionPolicy Bypass -File .\scripts\check-production-readiness.ps1
 ```
 
-## 3. Khởi động production
+Trên Ubuntu có thể tạo cấu hình và triển khai gọn bằng IP công khai của máy chủ:
+
+```bash
+./scripts/deploy-qlseller.sh http://IP_MAY_CHU
+```
+
+Lệnh này tự tạo `.env.production` nếu chưa có, dựng toàn bộ dịch vụ và đợi API hoạt động. Mật khẩu quản trị ban đầu nằm trong biến `BOOTSTRAP_ADMIN_PASSWORD` của `.env.production` trên máy chủ.
+
+## 4. Khởi động production thủ công
 
 Sao chép repository và `.env.production` lên VPS, sau đó chạy:
 
@@ -41,7 +64,7 @@ curl http://127.0.0.1/api/health
 
 Mỗi lần API khởi động, migration được áp dụng tự động. Bootstrap production chỉ tạo dữ liệu nền nếu chưa có: tài khoản chủ doanh nghiệp, vai trò chuẩn, chi nhánh, kho, 3 TikTok Seller, 3 Shopee Seller, Facebook Page và cửa hàng offline. Bootstrap không tạo sản phẩm, đơn hàng hay hội thoại demo và không đổi mật khẩu của tài khoản quản trị đã tồn tại.
 
-## 4. Kết nối các kênh thật
+## 5. Kết nối các kênh thật
 
 Đăng nhập bằng email quản trị và mật khẩu trong `.env.production`, mở `/channels`, rồi cấu hình từng gian hàng.
 
@@ -55,7 +78,7 @@ Webhook hiển thị ngay trên màn hình cấu hình kênh. Khai báo đúng U
 
 Credential được mã hóa trước khi lưu PostgreSQL bằng `CHANNEL_CREDENTIAL_KEY`. Không thay đổi hoặc làm mất khóa này sau khi đã kết nối kênh, nếu không token đã lưu sẽ không thể giải mã.
 
-## 5. Sao lưu và cập nhật
+## 6. Sao lưu và cập nhật
 
 Trước mỗi lần cập nhật, tạo bản sao lưu tại `/backups`. Cập nhật mã nguồn và chạy lại:
 
