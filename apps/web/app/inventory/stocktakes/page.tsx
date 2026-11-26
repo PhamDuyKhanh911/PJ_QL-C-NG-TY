@@ -40,10 +40,11 @@ export default function StocktakesPage() {
 
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy('create'); setError('');
-    const data = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const data = new FormData(form);
     try {
       const created = await request('/inventory/stocktakes', { method: 'POST', body: JSON.stringify({ warehouseId: data.get('warehouseId'), note: data.get('note') }) });
-      event.currentTarget.reset(); await load(created.id);
+      form.reset(); await load(created.id);
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Không thể mở phiên kiểm kê'); } finally { setBusy(''); }
   }
 

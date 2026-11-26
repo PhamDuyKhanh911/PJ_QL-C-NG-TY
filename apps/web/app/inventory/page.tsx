@@ -48,12 +48,12 @@ export default function InventoryPage() {
   const totals = rows.reduce((sum, row) => ({ onHand: sum.onHand + (row.balance?.onHand ?? 0), available: sum.available + Math.max(0, (row.balance?.onHand ?? 0) - (row.balance?.reserved ?? 0) - (row.balance?.quarantined ?? 0) - (row.balance?.safetyStock ?? 0)), low: sum.low + (((row.balance?.onHand ?? 0) - (row.balance?.reserved ?? 0) - (row.balance?.quarantined ?? 0) - (row.balance?.safetyStock ?? 0)) <= (row.balance?.reorderPoint ?? 0) ? 1 : 0) }), { onHand: 0, available: 0, low: 0 });
 
   async function submitInitialStock(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); const form = new FormData(event.currentTarget); setSaving(true); setError(''); setNotice('');
+    event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement); setSaving(true); setError(''); setNotice('');
     try {
       const response = await fetch(`${apiUrl}/inventory/initial-stock`, { method: 'POST', headers: { Authorization: `Bearer ${localStorage.getItem('erp_access_token')}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ warehouseId, variantId: form.get('variantId'), quantity: Number(form.get('quantity')), note: form.get('note') }) });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(Array.isArray(payload.message) ? payload.message[0] : payload.message ?? 'Không thể nhập tồn đầu kỳ');
-      setNotice('Đã ghi nhận tồn đầu kỳ và lưu người thao tác trong nhật ký hệ thống.'); event.currentTarget.reset(); await load();
+      setNotice('Đã ghi nhận tồn đầu kỳ và lưu người thao tác trong nhật ký hệ thống.'); formElement.reset(); await load();
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Không thể nhập tồn đầu kỳ'); } finally { setSaving(false); }
   }
 
