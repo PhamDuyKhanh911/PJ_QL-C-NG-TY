@@ -110,19 +110,19 @@ async function main() {
   });
 
   const sampleProducts = [
-    { product: 'Áo thun Basic', sku: 'AT-BASIC-DEN-M', variant: 'Đen / M', cost: 85000, price: 169000, stock: 18, reorder: 20, safety: 5 },
-    { product: 'Áo thun Basic', sku: 'AT-BASIC-TRANG-L', variant: 'Trắng / L', cost: 85000, price: 169000, stock: 52, reorder: 20, safety: 5 },
-    { product: 'Quần jean Slim', sku: 'QJ-SLIM-XANH-30', variant: 'Xanh / 30', cost: 210000, price: 429000, stock: 9, reorder: 15, safety: 3 },
-    { product: 'Túi đeo chéo', sku: 'TDC-DEN-01', variant: 'Đen', cost: 120000, price: 259000, stock: 41, reorder: 12, safety: 4 },
+    { product: 'Áo thun Basic', unit: 'Cái', sku: 'AT-BASIC-DEN-M', variant: 'Đen / M', size: 'M', color: 'Đen', cost: 85000, price: 169000, stock: 18, reorder: 20, safety: 5 },
+    { product: 'Áo thun Basic', unit: 'Cái', sku: 'AT-BASIC-TRANG-L', variant: 'Trắng / L', size: 'L', color: 'Trắng', cost: 85000, price: 169000, stock: 52, reorder: 20, safety: 5 },
+    { product: 'Quần jean Slim', unit: 'Cái', sku: 'QJ-SLIM-XANH-30', variant: 'Xanh / 30', size: '30', color: 'Xanh', cost: 210000, price: 429000, stock: 9, reorder: 15, safety: 3 },
+    { product: 'Túi đeo chéo', unit: 'Túi', sku: 'TDC-DEN-01', variant: 'Đen', size: '', color: 'Đen', cost: 120000, price: 259000, stock: 41, reorder: 12, safety: 4 },
   ];
 
   for (const item of sampleProducts) {
     let product = await prisma.product.findFirst({ where: { organizationId: organization.id, name: item.product } });
-    product ??= await prisma.product.create({ data: { organizationId: organization.id, name: item.product } });
+    product ??= await prisma.product.create({ data: { organizationId: organization.id, name: item.product, unit: item.unit } });
     const variant = await prisma.productVariant.upsert({
       where: { sku: item.sku },
-      update: { name: item.variant, costPrice: item.cost, salePrice: item.price },
-      create: { productId: product.id, sku: item.sku, name: item.variant, costPrice: item.cost, salePrice: item.price },
+      update: { name: item.variant, size: item.size || null, color: item.color || null, costPrice: item.cost, salePrice: item.price },
+      create: { productId: product.id, sku: item.sku, name: item.variant, size: item.size || null, color: item.color || null, costPrice: item.cost, salePrice: item.price },
     });
     await prisma.inventoryBalance.upsert({
       where: { warehouseId_variantId: { warehouseId: warehouse.id, variantId: variant.id } },

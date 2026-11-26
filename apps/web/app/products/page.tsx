@@ -4,14 +4,15 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import './products.css';
 import './channel-mapping.css';
+import './merchandising.css';
 
 type Channel = { id: string; code: string; name: string; type: string };
 type Mapping = { id: string; externalProductId: string; externalSkuId: string; externalSku?: string; channelAccount: Channel };
 type Balance = { onHand: number; reserved: number; quarantined: number; safetyStock: number; warehouse: { name: string } };
-type Variant = { id: string; sku: string; barcode?: string; name: string; costPrice: string; salePrice: string; balances: Balance[]; mappings: Mapping[] };
-type Product = { id: string; name: string; active: boolean; variants: Variant[] };
+type Variant = { id: string; sku: string; barcode?: string; name: string; size?: string; color?: string; costPrice: string; salePrice: string; balances: Balance[]; mappings: Mapping[] };
+type Product = { id: string; name: string; imageUrl?: string; unit: string; active: boolean; variants: Variant[] };
 type UnmappedChannelSku = { id: string; externalProductId?: string; externalSkuId: string; reportedAvailable: number; observedAt: string; source?: string; channelAccount: Channel };
-type Dialog = { type: 'CREATE_PRODUCT' } | { type: 'ADD_VARIANT'; product: Product } | { type: 'EDIT_VARIANT'; variant: Variant } | { type: 'MAPPINGS'; variant: Variant } | { type: 'RESOLVE_EXTERNAL'; item: UnmappedChannelSku } | null;
+type Dialog = { type: 'CREATE_PRODUCT' } | { type: 'EDIT_PRODUCT'; product: Product } | { type: 'ADD_VARIANT'; product: Product } | { type: 'EDIT_VARIANT'; variant: Variant } | { type: 'MAPPINGS'; variant: Variant } | { type: 'RESOLVE_EXTERNAL'; item: UnmappedChannelSku } | null;
 type CurrentUser = { permissions: string[] };
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api';
@@ -22,6 +23,8 @@ function variantPayload(form: FormData) {
     sku: String(form.get('sku') ?? ''),
     barcode: String(form.get('barcode') ?? ''),
     name: String(form.get('name') ?? ''),
+    size: String(form.get('size') ?? ''),
+    color: String(form.get('color') ?? ''),
     costPrice: Number(form.get('costPrice')),
     salePrice: Number(form.get('salePrice')),
   };
@@ -78,7 +81,7 @@ export default function ProductsPage() {
   const onlineChannels = channels.filter((channel) => channel.type !== 'OFFLINE_STORE');
   const visibleProducts = useMemo(() => products.filter((product) => {
     const matchesStatus = status === 'ALL' || (status === 'ACTIVE' ? product.active : !product.active);
-    const haystack = `${product.name} ${product.variants.map((variant) => `${variant.sku} ${variant.name} ${variant.barcode ?? ''}`).join(' ')}`.toLowerCase();
+    const haystack = `${product.name} ${product.unit} ${product.variants.map((variant) => `${variant.sku} ${variant.name} ${variant.size ?? ''} ${variant.color ?? ''} ${variant.barcode ?? ''}`).join(' ')}`.toLowerCase();
     return matchesStatus && haystack.includes(search.toLowerCase());
   }), [products, search, status]);
   const allVariants = products.flatMap((product) => product.variants);
@@ -115,7 +118,13 @@ export default function ProductsPage() {
   function createProduct(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    return mutate('/catalog/products', 'POST', { name: form.get('productName'), variants: [variantPayload(form)] });
+    return mutate('/catalog/products', 'POST', { name: form.get('productName'), imageUrl: form.get('imageUrl'), unit: form.get('unit'), variants: [variantPayload(form)] });
+  }
+
+  function editProduct(event: FormEvent<HTMLFormElement>, productId: string) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    return mutate(`/catalog/products/${productId}`, 'PATCH', { name: form.get('productName'), imageUrl: form.get('imageUrl'), unit: form.get('unit') });
   }
 
   function addVariant(event: FormEvent<HTMLFormElement>, productId: string) {
@@ -196,14 +205,14 @@ export default function ProductsPage() {
             {visibleProducts.map((product) => (
               <article className={!product.active ? 'inactive' : ''} key={product.id}>
                 <div className="product-title">
-                  <div><h3>{product.name}</h3><span>{product.variants.length} SKU · {product.active ? 'Đang kinh doanh' : 'Đã ngừng kinh doanh'}</span></div>
-                  {canManage && <div><button className="secondary" onClick={() => setDialog({ type: 'ADD_VARIANT', product })}>+ SKU</button><button className={product.active ? 'stop' : 'restore'} onClick={() => mutate(`/catalog/products/${product.id}`, 'PATCH', { active: !product.active })}>{product.active ? 'Ngừng bán' : 'Kinh doanh lại'}</button></div>}
+                  <div className="product-identity">{product.imageUrl ? <img src={product.imageUrl} alt={product.name} /> : <span className="product-image-placeholder">Ảnh</span>}<div><h3>{product.name}</h3><span>{product.variants.length} SKU · Đơn vị: {product.unit} · {product.active ? 'Đang kinh doanh' : 'Đã ngừng kinh doanh'}</span></div></div>
+                  {canManage && <div><button className="secondary" onClick={() => setDialog({ type: 'EDIT_PRODUCT', product })}>Sửa SP</button><button className="secondary" onClick={() => setDialog({ type: 'ADD_VARIANT', product })}>+ SKU</button><button className={product.active ? 'stop' : 'restore'} onClick={() => mutate(`/catalog/products/${product.id}`, 'PATCH', { active: !product.active })}>{product.active ? 'Ngừng bán' : 'Kinh doanh lại'}</button></div>}
                 </div>
-                <div className="variant-table-wrap"><table><thead><tr><th>SKU / Biến thể</th><th>Giá vốn</th><th>Giá bán</th><th>Biên gộp</th><th>Tồn khả dụng</th><th>Liên kết seller</th><th></th></tr></thead><tbody>
+                <div className="variant-table-wrap"><table><thead><tr><th>SKU / Biến thể</th><th>Size</th><th>Màu sắc</th><th>Giá vốn</th><th>Giá bán</th><th>Biên gộp</th><th>Tồn khả dụng</th><th>Liên kết seller</th><th></th></tr></thead><tbody>
                   {product.variants.map((variant) => {
                     const available = variant.balances.reduce((sum, balance) => sum + Math.max(0, balance.onHand - balance.reserved - balance.quarantined - balance.safetyStock), 0);
                     const margin = Number(variant.salePrice) ? (Number(variant.salePrice) - Number(variant.costPrice)) / Number(variant.salePrice) * 100 : 0;
-                    return <tr key={variant.id}><td><b>{variant.sku}</b><small>{variant.name}{variant.barcode ? ` · ${variant.barcode}` : ''}</small></td><td>{money(variant.costPrice)}</td><td><b>{money(variant.salePrice)}</b></td><td className={margin < 20 ? 'low-margin' : ''}>{margin.toLocaleString('vi-VN', { maximumFractionDigits: 1 })}%</td><td><strong>{available}</strong><small>{variant.balances.length} kho</small></td><td><div className="mapping-tags">{variant.mappings.map((mapping) => <span key={mapping.id} title={mapping.externalSkuId}>{mapping.channelAccount.code}</span>)}{!variant.mappings.length && <em>Chưa liên kết</em>}</div></td><td>{canManage && <div className="row-actions"><button onClick={() => setDialog({ type: 'EDIT_VARIANT', variant })}>Sửa</button><button onClick={() => setDialog({ type: 'MAPPINGS', variant })}>Ánh xạ</button></div>}</td></tr>;
+                    return <tr key={variant.id}><td><b>{variant.sku}</b><small>{variant.name}{variant.barcode ? ` · ${variant.barcode}` : ''}</small></td><td>{variant.size || '—'}</td><td>{variant.color || '—'}</td><td>{money(variant.costPrice)}</td><td><b>{money(variant.salePrice)}</b></td><td className={margin < 20 ? 'low-margin' : ''}>{margin.toLocaleString('vi-VN', { maximumFractionDigits: 1 })}%</td><td><strong>{available}</strong><small>{variant.balances.length} kho</small></td><td><div className="mapping-tags">{variant.mappings.map((mapping) => <span key={mapping.id} title={mapping.externalSkuId}>{mapping.channelAccount.code}</span>)}{!variant.mappings.length && <em>Chưa liên kết</em>}</div></td><td>{canManage && <div className="row-actions"><button onClick={() => setDialog({ type: 'EDIT_VARIANT', variant })}>Sửa</button><button onClick={() => setDialog({ type: 'MAPPINGS', variant })}>Ánh xạ</button></div>}</td></tr>;
                   })}
                 </tbody></table></div>
               </article>
@@ -214,7 +223,8 @@ export default function ProductsPage() {
       </section>
 
       {dialog && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) closeDialog(); }}>
-        {dialog.type === 'CREATE_PRODUCT' && <form className="product-modal" onSubmit={createProduct}><div className="modal-title"><div><h2>Thêm sản phẩm</h2><span>Tạo sản phẩm cùng SKU đầu tiên</span></div><button type="button" onClick={() => setDialog(null)}>×</button></div><label>Tên sản phẩm<input name="productName" minLength={2} required autoFocus /></label><VariantFields /><button className="save" disabled={saving}>{saving ? 'Đang lưu...' : 'Tạo sản phẩm'}</button></form>}
+        {dialog.type === 'CREATE_PRODUCT' && <form className="product-modal" onSubmit={createProduct}><div className="modal-title"><div><h2>Thêm sản phẩm</h2><span>Tạo sản phẩm cùng SKU đầu tiên</span></div><button type="button" onClick={() => setDialog(null)}>×</button></div><ProductFields /><VariantFields /><button className="save" disabled={saving}>{saving ? 'Đang lưu...' : 'Tạo sản phẩm'}</button></form>}
+        {dialog.type === 'EDIT_PRODUCT' && <form className="product-modal" onSubmit={(event) => editProduct(event, dialog.product.id)}><div className="modal-title"><div><h2>Thông tin sản phẩm</h2><span>Ảnh đại diện và đơn vị tính dùng chung cho các SKU</span></div><button type="button" onClick={() => setDialog(null)}>×</button></div><ProductFields product={dialog.product} /><button className="save" disabled={saving}>{saving ? 'Đang lưu...' : 'Lưu sản phẩm'}</button></form>}
         {dialog.type === 'ADD_VARIANT' && <form className="product-modal" onSubmit={(event) => addVariant(event, dialog.product.id)}><div className="modal-title"><div><h2>Thêm SKU</h2><span>{dialog.product.name}</span></div><button type="button" onClick={() => setDialog(null)}>×</button></div><VariantFields /><button className="save" disabled={saving}>{saving ? 'Đang lưu...' : 'Thêm SKU'}</button></form>}
         {dialog.type === 'EDIT_VARIANT' && <form className="product-modal" onSubmit={(event) => editVariant(event, dialog.variant.id)}><div className="modal-title"><div><h2>Cập nhật SKU</h2><span>{dialog.variant.sku}</span></div><button type="button" onClick={() => setDialog(null)}>×</button></div><VariantFields variant={dialog.variant} /><button className="save" disabled={saving}>{saving ? 'Đang lưu...' : 'Lưu thay đổi'}</button></form>}
         {dialog.type === 'MAPPINGS' && <form className="product-modal mapping-modal" onSubmit={(event) => saveMappings(event, dialog.variant)}><div className="modal-title"><div><h2>Ánh xạ seller</h2><span>{dialog.variant.sku} · Để trống SKU ID nếu muốn gỡ liên kết</span></div><button type="button" onClick={() => setDialog(null)}>×</button></div><div className="mapping-form">{onlineChannels.map((channel) => { const current = dialog.variant.mappings.find((mapping) => mapping.channelAccount.id === channel.id); return <fieldset key={channel.id}><legend>{channel.name}<small>{channel.type.replaceAll('_', ' ')}</small></legend><label>Mã sản phẩm trên kênh<input name={`product-${channel.id}`} defaultValue={current?.externalProductId} /></label><label>SKU ID trên kênh<input name={`sku-${channel.id}`} defaultValue={current?.externalSkuId} /></label></fieldset>; })}</div><button className="save" disabled={saving}>{saving ? 'Đang lưu...' : 'Lưu toàn bộ ánh xạ'}</button></form>}
@@ -224,6 +234,10 @@ export default function ProductsPage() {
   );
 }
 
+function ProductFields({ product }: { product?: Product }) {
+  return <div className="product-fields"><label>Tên sản phẩm<input name="productName" defaultValue={product?.name} minLength={2} required autoFocus /></label><label>Đơn vị tính<select name="unit" defaultValue={product?.unit ?? 'Cái'}><option>Cái</option><option>Đôi</option><option>Bộ</option><option>Túi</option><option>Hộp</option><option>Gói</option><option>Thùng</option><option>Chiếc</option></select></label><label className="wide">Đường dẫn hình ảnh<input name="imageUrl" type="url" defaultValue={product?.imageUrl} placeholder="https://.../hinh-san-pham.jpg" /></label></div>;
+}
+
 function VariantFields({ variant }: { variant?: Variant }) {
-  return <div className="variant-fields"><label>SKU nội bộ<input name="sku" defaultValue={variant?.sku} minLength={2} required /></label><label>Tên biến thể<input name="name" defaultValue={variant?.name} required /></label><label>Mã vạch<input name="barcode" defaultValue={variant?.barcode} /></label><label>Giá vốn<input name="costPrice" type="number" min={0} step={1000} defaultValue={variant?.costPrice ?? 0} required /></label><label>Giá bán<input name="salePrice" type="number" min={0} step={1000} defaultValue={variant?.salePrice ?? 0} required /></label></div>;
+  return <div className="variant-fields"><label>SKU nội bộ<input name="sku" defaultValue={variant?.sku} minLength={2} required /></label><label>Tên biến thể<input name="name" defaultValue={variant?.name} required /></label><label>Size / Kích cỡ<input name="size" defaultValue={variant?.size} placeholder="S, M, L, 38, 39..." /></label><label>Màu sắc<input name="color" defaultValue={variant?.color} placeholder="Đen, Trắng, Xanh..." /></label><label>Mã vạch<input name="barcode" defaultValue={variant?.barcode} /></label><label>Giá vốn<input name="costPrice" type="number" min={0} step={1000} defaultValue={variant?.costPrice ?? 0} required /></label><label>Giá bán<input name="salePrice" type="number" min={0} step={1000} defaultValue={variant?.salePrice ?? 0} required /></label></div>;
 }

@@ -115,6 +115,8 @@ export class CatalogService {
         data: {
           organizationId,
           name: input.name.trim(),
+          imageUrl: input.imageUrl?.trim() || null,
+          unit: input.unit?.trim() || 'Cái',
           variants: { create: input.variants.map((variant) => this.variantData(variant)) },
         },
         include: { variants: true },
@@ -132,6 +134,8 @@ export class CatalogService {
         where: { id: product.id },
         data: {
           ...(input.name !== undefined ? { name: input.name.trim() } : {}),
+          ...(input.imageUrl !== undefined ? { imageUrl: input.imageUrl.trim() || null } : {}),
+          ...(input.unit !== undefined ? { unit: input.unit.trim() || 'Cái' } : {}),
           ...(input.active !== undefined ? { active: input.active } : {}),
         },
       });
@@ -163,6 +167,8 @@ export class CatalogService {
             ...(input.sku !== undefined ? { sku: input.sku.trim().toUpperCase() } : {}),
             ...(input.barcode !== undefined ? { barcode: input.barcode.trim() || null } : {}),
             ...(input.name !== undefined ? { name: input.name.trim() } : {}),
+            ...(input.size !== undefined ? { size: input.size.trim() || null } : {}),
+            ...(input.color !== undefined ? { color: input.color.trim() || null } : {}),
             ...(input.costPrice !== undefined ? { costPrice: input.costPrice } : {}),
             ...(input.salePrice !== undefined ? { salePrice: input.salePrice } : {}),
           },
@@ -228,6 +234,8 @@ export class CatalogService {
       sku: input.sku.trim().toUpperCase(),
       barcode: input.barcode?.trim() || null,
       name: input.name.trim(),
+      size: input.size?.trim() || null,
+      color: input.color?.trim() || null,
       costPrice: input.costPrice,
       salePrice: input.salePrice,
     };

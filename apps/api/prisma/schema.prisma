@@ -155,6 +155,8 @@ model Product {
   id             String   @id @default(cuid())
   organizationId String
   name           String
+  imageUrl       String?
+  unit           String   @default("Cái")
   active         Boolean  @default(true)
   organization   Organization @relation(fields: [organizationId], references: [id])
   variants       ProductVariant[]
@@ -166,6 +168,8 @@ model ProductVariant {
   sku       String   @unique
   barcode   String?  @unique
   name      String
+  size      String?
+  color     String?
   costPrice Decimal  @db.Decimal(18, 2)
   salePrice Decimal  @db.Decimal(18, 2)
   product   Product  @relation(fields: [productId], references: [id])

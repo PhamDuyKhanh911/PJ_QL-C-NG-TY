@@ -1,0 +1,7 @@
+ALTER TABLE "Product"
+ADD COLUMN "imageUrl" TEXT,
+ADD COLUMN "unit" TEXT NOT NULL DEFAULT 'Cái';
+
+ALTER TABLE "ProductVariant"
+ADD COLUMN "size" TEXT,
+ADD COLUMN "color" TEXT;
