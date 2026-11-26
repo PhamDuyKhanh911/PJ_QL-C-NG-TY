@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { assertOrganizationScope, resolveDataScope } from '../auth/data-scope';
@@ -44,6 +45,23 @@ export class CatalogController {
   updateProduct(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() input: UpdateProductDto) {
     assertOrganizationScope(resolveDataScope(user, 'catalog.manage'));
     return this.catalog.updateProduct(user.organizationId, user.id, id, input);
+  }
+
+  @Post('products/:id/image') @RequirePermissions('catalog.manage')
+  @UseInterceptors(FileInterceptor('image', { limits: { fileSize: 5 * 1024 * 1024 } }))
+  uploadProductImage(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @UploadedFile() file?: { buffer: Buffer; mimetype: string; size: number; originalname: string },
+  ) {
+    assertOrganizationScope(resolveDataScope(user, 'catalog.manage'));
+    return this.catalog.setProductImage(user.organizationId, id, file);
+  }
+
+  @Delete('products/:id/image') @RequirePermissions('catalog.manage')
+  deleteProductImage(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    assertOrganizationScope(resolveDataScope(user, 'catalog.manage'));
+    return this.catalog.deleteProductImage(user.organizationId, id);
   }
 
   @Post('products/:id/variants') @RequirePermissions('catalog.manage')

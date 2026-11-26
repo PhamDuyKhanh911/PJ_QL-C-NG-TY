@@ -17,6 +17,7 @@ type CurrentUser = { permissions: string[] };
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api';
 const money = (value: string | number) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND', maximumFractionDigits: 0 }).format(Number(value));
+const imageSrc = (value?: string) => value?.startsWith('/api/') ? `${apiUrl.replace(/\/api\/?$/, '')}${value}` : value;
 
 function variantPayload(form: FormData) {
   return {
@@ -115,16 +116,44 @@ export default function ProductsPage() {
     } finally { setSaving(false); }
   }
 
-  function createProduct(event: FormEvent<HTMLFormElement>) {
+  async function saveProduct(event: FormEvent<HTMLFormElement>, product?: Product) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    return mutate('/catalog/products', 'POST', { name: form.get('productName'), imageUrl: form.get('imageUrl'), unit: form.get('unit'), variants: [variantPayload(form)] });
-  }
-
-  function editProduct(event: FormEvent<HTMLFormElement>, productId: string) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    return mutate(`/catalog/products/${productId}`, 'PATCH', { name: form.get('productName'), imageUrl: form.get('imageUrl'), unit: form.get('unit') });
+    const file = form.get('image');
+    const selectedImage = file instanceof File && file.size > 0 ? file : null;
+    if (selectedImage && !['image/jpeg', 'image/png', 'image/webp'].includes(selectedImage.type)) { setError('Chỉ hỗ trợ ảnh JPG, PNG hoặc WebP'); return; }
+    if (selectedImage && selectedImage.size > 5 * 1024 * 1024) { setError('Dung lượng ảnh tối đa là 5 MB'); return; }
+    setSaving(true); setError('');
+    try {
+      const response = await fetch(`${apiUrl}/catalog/products${product ? `/${product.id}` : ''}`, {
+        method: product ? 'PATCH' : 'POST',
+        headers: { Authorization: `Bearer ${localStorage.getItem('erp_access_token')}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(product
+          ? { name: form.get('productName'), unit: form.get('unit') }
+          : { name: form.get('productName'), unit: form.get('unit'), variants: [variantPayload(form)] }),
+      });
+      const saved = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(Array.isArray(saved.message) ? saved.message[0] : saved.message ?? 'Không thể lưu sản phẩm');
+      const productId = product?.id ?? saved.id;
+      if (selectedImage) {
+        const upload = new FormData();
+        upload.set('image', selectedImage);
+        const uploadResponse = await fetch(`${apiUrl}/catalog/products/${productId}/image`, {
+          method: 'POST', headers: { Authorization: `Bearer ${localStorage.getItem('erp_access_token')}` }, body: upload,
+        });
+        const uploadResult = await uploadResponse.json().catch(() => ({}));
+        if (!uploadResponse.ok) throw new Error(Array.isArray(uploadResult.message) ? uploadResult.message[0] : uploadResult.message ?? 'Không thể tải hình ảnh');
+      } else if (product && form.get('removeImage') === 'on') {
+        const deleteResponse = await fetch(`${apiUrl}/catalog/products/${productId}/image`, {
+          method: 'DELETE', headers: { Authorization: `Bearer ${localStorage.getItem('erp_access_token')}` },
+        });
+        if (!deleteResponse.ok) throw new Error('Không thể xóa hình ảnh');
+      }
+      setDialog(null);
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Không thể lưu sản phẩm');
+    } finally { setSaving(false); }
   }
 
   function addVariant(event: FormEvent<HTMLFormElement>, productId: string) {
@@ -205,7 +234,7 @@ export default function ProductsPage() {
             {visibleProducts.map((product) => (
               <article className={!product.active ? 'inactive' : ''} key={product.id}>
                 <div className="product-title">
-                  <div className="product-identity">{product.imageUrl ? <img src={product.imageUrl} alt={product.name} /> : <span className="product-image-placeholder">Ảnh</span>}<div><h3>{product.name}</h3><span>{product.variants.length} SKU · Đơn vị: {product.unit} · {product.active ? 'Đang kinh doanh' : 'Đã ngừng kinh doanh'}</span></div></div>
+                  <div className="product-identity">{product.imageUrl ? <img src={imageSrc(product.imageUrl)} alt={product.name} /> : <span className="product-image-placeholder">Ảnh</span>}<div><h3>{product.name}</h3><span>{product.variants.length} SKU · Đơn vị: {product.unit} · {product.active ? 'Đang kinh doanh' : 'Đã ngừng kinh doanh'}</span></div></div>
                   {canManage && <div><button className="secondary" onClick={() => setDialog({ type: 'EDIT_PRODUCT', product })}>Sửa SP</button><button className="secondary" onClick={() => setDialog({ type: 'ADD_VARIANT', product })}>+ SKU</button><button className={product.active ? 'stop' : 'restore'} onClick={() => mutate(`/catalog/products/${product.id}`, 'PATCH', { active: !product.active })}>{product.active ? 'Ngừng bán' : 'Kinh doanh lại'}</button></div>}
                 </div>
                 <div className="variant-table-wrap"><table><thead><tr><th>SKU / Biến thể</th><th>Size</th><th>Màu sắc</th><th>Giá vốn</th><th>Giá bán</th><th>Biên gộp</th><th>Tồn khả dụng</th><th>Liên kết seller</th><th></th></tr></thead><tbody>
@@ -223,8 +252,8 @@ export default function ProductsPage() {
       </section>
 
       {dialog && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) closeDialog(); }}>
-        {dialog.type === 'CREATE_PRODUCT' && <form className="product-modal" onSubmit={createProduct}><div className="modal-title"><div><h2>Thêm sản phẩm</h2><span>Tạo sản phẩm cùng SKU đầu tiên</span></div><button type="button" onClick={() => setDialog(null)}>×</button></div><ProductFields /><VariantFields /><button className="save" disabled={saving}>{saving ? 'Đang lưu...' : 'Tạo sản phẩm'}</button></form>}
-        {dialog.type === 'EDIT_PRODUCT' && <form className="product-modal" onSubmit={(event) => editProduct(event, dialog.product.id)}><div className="modal-title"><div><h2>Thông tin sản phẩm</h2><span>Ảnh đại diện và đơn vị tính dùng chung cho các SKU</span></div><button type="button" onClick={() => setDialog(null)}>×</button></div><ProductFields product={dialog.product} /><button className="save" disabled={saving}>{saving ? 'Đang lưu...' : 'Lưu sản phẩm'}</button></form>}
+        {dialog.type === 'CREATE_PRODUCT' && <form className="product-modal" onSubmit={(event) => saveProduct(event)}><div className="modal-title"><div><h2>Thêm sản phẩm</h2><span>Tạo sản phẩm cùng SKU đầu tiên</span></div><button type="button" onClick={() => setDialog(null)}>×</button></div><ProductFields /><VariantFields /><button className="save" disabled={saving}>{saving ? 'Đang tải ảnh và lưu...' : 'Tạo sản phẩm'}</button></form>}
+        {dialog.type === 'EDIT_PRODUCT' && <form className="product-modal" onSubmit={(event) => saveProduct(event, dialog.product)}><div className="modal-title"><div><h2>Thông tin sản phẩm</h2><span>Ảnh đại diện tải trực tiếp từ máy tính</span></div><button type="button" onClick={() => setDialog(null)}>×</button></div><ProductFields product={dialog.product} /><button className="save" disabled={saving}>{saving ? 'Đang tải ảnh và lưu...' : 'Lưu sản phẩm'}</button></form>}
         {dialog.type === 'ADD_VARIANT' && <form className="product-modal" onSubmit={(event) => addVariant(event, dialog.product.id)}><div className="modal-title"><div><h2>Thêm SKU</h2><span>{dialog.product.name}</span></div><button type="button" onClick={() => setDialog(null)}>×</button></div><VariantFields /><button className="save" disabled={saving}>{saving ? 'Đang lưu...' : 'Thêm SKU'}</button></form>}
         {dialog.type === 'EDIT_VARIANT' && <form className="product-modal" onSubmit={(event) => editVariant(event, dialog.variant.id)}><div className="modal-title"><div><h2>Cập nhật SKU</h2><span>{dialog.variant.sku}</span></div><button type="button" onClick={() => setDialog(null)}>×</button></div><VariantFields variant={dialog.variant} /><button className="save" disabled={saving}>{saving ? 'Đang lưu...' : 'Lưu thay đổi'}</button></form>}
         {dialog.type === 'MAPPINGS' && <form className="product-modal mapping-modal" onSubmit={(event) => saveMappings(event, dialog.variant)}><div className="modal-title"><div><h2>Ánh xạ seller</h2><span>{dialog.variant.sku} · Để trống SKU ID nếu muốn gỡ liên kết</span></div><button type="button" onClick={() => setDialog(null)}>×</button></div><div className="mapping-form">{onlineChannels.map((channel) => { const current = dialog.variant.mappings.find((mapping) => mapping.channelAccount.id === channel.id); return <fieldset key={channel.id}><legend>{channel.name}<small>{channel.type.replaceAll('_', ' ')}</small></legend><label>Mã sản phẩm trên kênh<input name={`product-${channel.id}`} defaultValue={current?.externalProductId} /></label><label>SKU ID trên kênh<input name={`sku-${channel.id}`} defaultValue={current?.externalSkuId} /></label></fieldset>; })}</div><button className="save" disabled={saving}>{saving ? 'Đang lưu...' : 'Lưu toàn bộ ánh xạ'}</button></form>}
@@ -235,7 +264,15 @@ export default function ProductsPage() {
 }
 
 function ProductFields({ product }: { product?: Product }) {
-  return <div className="product-fields"><label>Tên sản phẩm<input name="productName" defaultValue={product?.name} minLength={2} required autoFocus /></label><label>Đơn vị tính<select name="unit" defaultValue={product?.unit ?? 'Cái'}><option>Cái</option><option>Đôi</option><option>Bộ</option><option>Túi</option><option>Hộp</option><option>Gói</option><option>Thùng</option><option>Chiếc</option></select></label><label className="wide">Đường dẫn hình ảnh<input name="imageUrl" type="url" defaultValue={product?.imageUrl} placeholder="https://.../hinh-san-pham.jpg" /></label></div>;
+  const [preview, setPreview] = useState(imageSrc(product?.imageUrl));
+  return <div className="product-fields">
+    <label>Tên sản phẩm<input name="productName" defaultValue={product?.name} minLength={2} required autoFocus /></label>
+    <label>Đơn vị tính<select name="unit" defaultValue={product?.unit ?? 'Cái'}><option>Cái</option><option>Đôi</option><option>Bộ</option><option>Túi</option><option>Hộp</option><option>Gói</option><option>Thùng</option><option>Chiếc</option></select></label>
+    <div className="wide product-image-upload"><span>Hình ảnh sản phẩm</span><div className="image-upload-row">
+      {preview ? <img src={preview} alt="Xem trước sản phẩm" /> : <span className="upload-placeholder">Chưa có ảnh</span>}
+      <div><input name="image" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) setPreview(URL.createObjectURL(file)); }} /><small>Chọn ảnh JPG, PNG hoặc WebP từ máy tính · tối đa 5 MB</small>{product?.imageUrl && <label className="remove-image"><input name="removeImage" type="checkbox" onChange={(event) => setPreview(event.currentTarget.checked ? undefined : imageSrc(product.imageUrl))} /> Xóa ảnh hiện tại</label>}</div>
+    </div></div>
+  </div>;
 }
 
 function VariantFields({ variant }: { variant?: Variant }) {

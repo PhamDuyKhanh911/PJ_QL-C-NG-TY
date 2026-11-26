@@ -146,6 +146,42 @@ export class CatalogService {
     });
   }
 
+  async setProductImage(
+    organizationId: string,
+    productId: string,
+    file?: { buffer: Buffer; mimetype: string; size: number; originalname: string },
+  ) {
+    if (!file) throw new BadRequestException('Vui lòng chọn hình ảnh từ máy tính');
+    const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+    if (!allowedTypes.has(file.mimetype)) throw new BadRequestException('Chỉ hỗ trợ ảnh JPG, PNG hoặc WebP');
+    if (file.size <= 0 || file.size > 5 * 1024 * 1024) throw new BadRequestException('Dung lượng ảnh tối đa là 5 MB');
+    const product = await this.prisma.product.findFirst({ where: { id: productId, organizationId }, select: { id: true } });
+    if (!product) throw new NotFoundException('Không tìm thấy sản phẩm');
+    const version = Date.now();
+    const publicBaseUrl = (process.env.API_PUBLIC_URL ?? 'http://localhost:4000').replace(/\/$/, '');
+    const imageUrl = `${publicBaseUrl}/api/product-images/${product.id}?v=${version}`;
+    const imageData = new Uint8Array(file.buffer);
+    await this.prisma.$transaction([
+      this.prisma.productImage.upsert({
+        where: { productId: product.id },
+        create: { productId: product.id, data: imageData, mimeType: file.mimetype, size: file.size },
+        update: { data: imageData, mimeType: file.mimetype, size: file.size },
+      }),
+      this.prisma.product.update({ where: { id: product.id }, data: { imageUrl } }),
+    ]);
+    return { imageUrl, size: file.size, mimeType: file.mimetype };
+  }
+
+  async deleteProductImage(organizationId: string, productId: string) {
+    const product = await this.prisma.product.findFirst({ where: { id: productId, organizationId }, select: { id: true } });
+    if (!product) throw new NotFoundException('Không tìm thấy sản phẩm');
+    await this.prisma.$transaction([
+      this.prisma.productImage.deleteMany({ where: { productId: product.id } }),
+      this.prisma.product.update({ where: { id: product.id }, data: { imageUrl: null } }),
+    ]);
+    return { deleted: true };
+  }
+
   async createVariant(organizationId: string, productId: string, input: CreateVariantDto) {
     const product = await this.prisma.product.findFirst({ where: { id: productId, organizationId } });
     if (!product) throw new NotFoundException('Không tìm thấy sản phẩm');
