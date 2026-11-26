@@ -1,5 +1,7 @@
 import type { Metadata } from 'next';
 import './styles.css';
+import './app-shell.css';
+import AppShell from './app-shell';
 
 export const metadata: Metadata = {
   title: 'Trung tâm điều hành doanh nghiệp',
@@ -9,8 +11,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="vi">
-      <body>{children}</body>
+      <body><AppShell>{children}</AppShell></body>
     </html>
   );
 }
-
