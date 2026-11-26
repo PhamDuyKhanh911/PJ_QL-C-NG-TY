@@ -12,6 +12,7 @@ import { resolveDataScope } from '../auth/data-scope';
 import { CreateStocktakeDto } from './dto/create-stocktake.dto';
 import { UpdateStocktakeItemDto } from './dto/update-stocktake-item.dto';
 import { InitializeInventoryDto } from './dto/initialize-inventory.dto';
+import { CreateInventoryReceiptDto } from './dto/create-inventory-receipt.dto';
 
 @Controller('inventory')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -23,6 +24,12 @@ export class InventoryController {
   adjust(@CurrentUser() user: AuthenticatedUser, @Body() input: AdjustInventoryDto) { return this.inventory.adjust(user.organizationId, user.id, input, resolveDataScope(user, 'inventory.adjust')); }
   @Post('initial-stock') @RequirePermissions('inventory.initialize')
   initializeStock(@CurrentUser() user: AuthenticatedUser, @Body() input: InitializeInventoryDto) { return this.inventory.initializeStock(user.organizationId, user.id, input, resolveDataScope(user, 'inventory.initialize')); }
+  @Get('receipts') @RequirePermissions('inventory.read')
+  receipts(@CurrentUser() user: AuthenticatedUser) { return this.inventory.receipts(user.organizationId, resolveDataScope(user, 'inventory.read')); }
+  @Post('receipts') @RequirePermissions('inventory.receive')
+  createReceipt(@CurrentUser() user: AuthenticatedUser, @Body() input: CreateInventoryReceiptDto) { return this.inventory.createReceipt(user.organizationId, user.id, input, resolveDataScope(user, 'inventory.receive')); }
+  @Post('receipts/:id/confirm') @RequirePermissions('inventory.receive')
+  confirmReceipt(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) { return this.inventory.confirmReceipt(user.organizationId, user.id, id, resolveDataScope(user, 'inventory.receive')); }
   @Get('quarantine') @RequirePermissions('inventory.read')
   quarantine(@CurrentUser() user: AuthenticatedUser) { return this.inventory.quarantine(user.organizationId, resolveDataScope(user, 'inventory.read')); }
   @Post('quarantine/inspect') @RequirePermissions('inventory.inspect_returns')

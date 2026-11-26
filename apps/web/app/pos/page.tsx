@@ -65,12 +65,13 @@ export default function PosPage() {
 
   useEffect(() => { load().catch((reason) => setError(reason instanceof Error ? reason.message : 'Không thể tải phiếu xuất')); }, [load]);
 
-  const variants = useMemo<ProductVariant[]>(() => products.flatMap((product) => product.variants.map((variant) => {
+  const allVariants = useMemo<ProductVariant[]>(() => products.flatMap((product) => product.variants.map((variant) => {
     const balance = variant.balances.find((item) => item.warehouseId === warehouseId);
     return { ...variant, productName: product.name, balance, available: balance ? Math.max(0, balance.onHand - balance.reserved - balance.quarantined - balance.safetyStock) : 0 };
-  })).filter((variant) => `${variant.productName} ${variant.sku} ${variant.name}`.toLowerCase().includes(search.trim().toLowerCase())), [products, search, warehouseId]);
+  })), [products, warehouseId]);
+  const variants = useMemo(() => { const term = search.trim().toLowerCase(); return term.length < 2 ? [] : allVariants.filter((variant) => `${variant.productName} ${variant.sku} ${variant.name}`.toLowerCase().includes(term)).slice(0, 30); }, [allVariants, search]);
 
-  const selected = variants.filter((variant) => (quantities[variant.id] ?? 0) > 0 && variant.available > 0);
+  const selected = allVariants.filter((variant) => (quantities[variant.id] ?? 0) > 0 && variant.available > 0);
   const total = selected.reduce((sum, variant) => sum + Number(variant.salePrice) * quantities[variant.id], 0);
   const canAdjust = permissions.includes('*') || permissions.includes('inventory.initialize');
 
@@ -118,9 +119,9 @@ export default function PosPage() {
     {error && <div className="pos-error">{error}</div>}{notice && <div className="pos-notice">{notice}</div>}
     <div className="pos-layout">
       <section className="pos-panel"><h2>1. Kho xuất & nhân viên nhận hàng</h2><div className="form"><label>Kho xuất hàng *<select value={warehouseId} onChange={(event) => { setWarehouseId(event.target.value); setQuantities({}); }}><option value="">Chọn kho</option>{warehouses.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}{warehouse.branch?.name ? ` · ${warehouse.branch.name}` : ''}</option>)}</select></label><label>Nhân viên chịu trách nhiệm *<select value={responsibleUserId} onChange={(event) => setResponsible(event.target.value)}><option value="">Chọn nhân viên</option>{handlers.map((user) => <option key={user.id} value={user.id}>{user.displayName} · {user.email}</option>)}</select></label></div></section>
-      <section className="pos-panel"><div className="pos-products-title"><div><h2>2. Sản phẩm trên phiếu</h2><span>{variants.length} SKU · SKU hết tồn vẫn hiển thị để có thể nhập tồn đầu kỳ</span></div><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Tìm sản phẩm hoặc SKU" /></div>
+      <section className="pos-panel"><div className="pos-products-title"><div><h2>2. Thêm sản phẩm vào phiếu xuất</h2><span>Nhập ít nhất 2 ký tự để tìm theo tên hoặc SKU; tối đa 30 kết quả.</span></div><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Nhập tên hoặc SKU để thêm" /></div>
         <div className="sku-list">{variants.map((variant) => <article className={variant.available <= 0 ? 'out-of-stock' : ''} key={variant.id}><div><b>{variant.productName}</b><small>{variant.sku} · {variant.name}</small><small>{variant.balance ? `Tồn thực tế ${variant.balance.onHand} · Có thể xuất ${variant.available}` : 'Chưa có tồn tại kho đã chọn'}</small></div><span>{Number(variant.salePrice).toLocaleString('vi-VN')}đ</span>{variant.available > 0 ? <label className="dispatch-quantity">SL xuất<input aria-label={`Số lượng xuất ${variant.sku}`} type="number" min="0" max={variant.available} value={quantities[variant.id] ?? 0} onChange={(event) => setQuantities((current) => ({ ...current, [variant.id]: Math.min(variant.available, Math.max(0, Number(event.target.value))) }))} /></label> : canAdjust ? <div className="initial-stock"><input aria-label={`Tồn đầu kỳ ${variant.sku}`} type="number" min="1" placeholder="Tồn đầu kỳ" value={stockDrafts[variant.id] || ''} onChange={(event) => setStockDrafts((current) => ({ ...current, [variant.id]: Math.max(0, Number(event.target.value)) }))} /><button disabled={Boolean(busy)} onClick={() => initializeStock(variant)}>{busy === `stock-${variant.id}` ? 'Đang nhập…' : 'Nhập tồn'}</button></div> : <em className="stock-required">Cần thủ kho nhập tồn</em>}</article>)}</div>
-        {!variants.length && <div className="pos-empty">Chưa có SKU sản phẩm. Hãy tạo sản phẩm và SKU tại mục Sản phẩm.</div>}
+        {!variants.length && <div className="pos-empty">{search.trim().length < 2 ? 'Tìm sản phẩm để thêm vào phiếu, hệ thống không hiển thị toàn bộ danh mục.' : 'Không tìm thấy SKU phù hợp.'}</div>}
       </section>
       <aside className="summary"><h2>Phiếu giao nội bộ</h2><div><span>Kho xuất</span><b>{warehouses.find((warehouse) => warehouse.id === warehouseId)?.name ?? 'Chưa chọn'}</b></div><div><span>Người nhận</span><b>{handlers.find((user) => user.id === responsibleUserId)?.displayName ?? 'Chưa chọn'}</b></div>{selected.map((variant) => <div key={variant.id}><span>{variant.sku} × {quantities[variant.id]}</span><b>{(Number(variant.salePrice) * quantities[variant.id]).toLocaleString('vi-VN')}đ</b></div>)}<footer><span>Tổng giá trị</span><strong>{total.toLocaleString('vi-VN')}đ</strong></footer><button disabled={Boolean(busy)} onClick={submit}>{busy === 'submit' ? 'Đang tạo…' : 'Tạo phiếu chờ thủ kho xuất'}</button></aside>
     </div>

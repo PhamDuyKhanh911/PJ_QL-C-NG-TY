@@ -116,7 +116,7 @@ export default function FulfillmentPage() {
   }
 
   const waiting = orders.filter((order) => order.status === 'CONFIRMED');
-  const shipped = orders.filter((order) => order.status === 'SHIPPED');
+  const shipped = orders.filter((order) => order.status === 'DELIVERED');
   const offline = waiting.filter((order) => order.channelAccount.type === 'OFFLINE_STORE');
   const onlineGroups = useMemo(() => {
     const map = new Map<string, OnlineGroup>();
@@ -174,7 +174,7 @@ export default function FulfillmentPage() {
     </section>
 
     <section className="panel">
-      <div className="title"><h2>Nhật ký đã bàn giao</h2><span>Truy vết thủ kho, người nhận và phiếu ký theo từng lượt</span></div>
+      <div className="title"><h2>Đơn đã giao thành công</h2><span>Truy vết thủ kho, người nhận và phiếu ký theo từng lượt</span></div>
       <div className="audit">{shipped.map((order) => {
         const event = order.fulfillmentEvents.at(-1);
         return <article key={order.id}>

@@ -1,14 +1,15 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { InventoryStocktakeStatus, InventoryTransactionType, Prisma } from '@prisma/client';
+import { AfterSaleType, InventoryReceiptSource, InventoryReceiptStatus, InventoryStocktakeStatus, InventoryTransactionType, OrderStatus, Prisma, PurchaseOrderStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdjustInventoryDto } from './dto/adjust-inventory.dto';
 import { InspectQuarantineDto, QuarantineDecision } from './dto/inspect-quarantine.dto';
 import { ListInventoryTransactionsDto } from './dto/list-inventory-transactions.dto';
 import { queueInventorySync } from '../channels/queue-inventory-sync';
-import { DataScope, warehouseScopeWhere } from '../auth/data-scope';
+import { DataScope, orderScopeWhere, warehouseScopeWhere } from '../auth/data-scope';
 import { CreateStocktakeDto } from './dto/create-stocktake.dto';
 import { UpdateStocktakeItemDto } from './dto/update-stocktake-item.dto';
 import { InitializeInventoryDto } from './dto/initialize-inventory.dto';
+import { CreateInventoryReceiptDto } from './dto/create-inventory-receipt.dto';
 
 @Injectable()
 export class InventoryService {
@@ -221,5 +222,80 @@ export class InventoryService {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new ConflictException('SKU đã được nhập tồn tại kho này bởi một thao tác khác');
       throw error;
     }
+  }
+
+  async receipts(organizationId: string, scope: DataScope) {
+    const rows = await this.prisma.inventoryReceipt.findMany({ where: { organizationId, warehouse: warehouseScopeWhere(organizationId, scope) }, include: { warehouse: true, items: { include: { variant: { include: { product: true } } } } }, orderBy: { createdAt: 'desc' }, take: 200 });
+    const userIds = [...new Set(rows.flatMap((row) => [row.createdById, ...(row.confirmedById ? [row.confirmedById] : [])]))];
+    const users = await this.prisma.user.findMany({ where: { organizationId, id: { in: userIds } }, select: { id: true, displayName: true, email: true } });
+    const byId = new Map(users.map((user) => [user.id, user]));
+    return rows.map((row) => ({ ...row, createdBy: byId.get(row.createdById) ?? null, confirmedBy: row.confirmedById ? byId.get(row.confirmedById) ?? null : null }));
+  }
+
+  async createReceipt(organizationId: string, userId: string, input: CreateInventoryReceiptDto, scope: DataScope) {
+    if (!input.items.length) throw new BadRequestException('Phiếu nhập cần ít nhất một sản phẩm');
+    if (new Set(input.items.map((item) => item.variantId)).size !== input.items.length) throw new BadRequestException('Không được lặp SKU trong phiếu nhập');
+    const [warehouse, variants] = await Promise.all([
+      this.prisma.warehouse.findFirst({ where: { AND: [{ id: input.warehouseId }, warehouseScopeWhere(organizationId, scope)] } }),
+      this.prisma.productVariant.findMany({ where: { id: { in: input.items.map((item) => item.variantId) }, product: { organizationId } } }),
+    ]);
+    if (!warehouse || variants.length !== input.items.length) throw new NotFoundException('Kho hoặc SKU không hợp lệ');
+    let items = input.items.map((item) => ({ ...item, quarantined: Boolean(item.quarantined) }));
+    if (input.source === InventoryReceiptSource.PURCHASE_ORDER) {
+      if (!input.sourceReferenceId) throw new BadRequestException('Cần chọn đơn mua hàng');
+      const order = await this.prisma.purchaseOrder.findFirst({ where: { id: input.sourceReferenceId, organizationId, warehouseId: warehouse.id, status: { in: [PurchaseOrderStatus.ORDERED, PurchaseOrderStatus.PARTIALLY_RECEIVED] } }, include: { items: true } });
+      if (!order) throw new BadRequestException('Đơn mua không còn chờ nhập tại kho đã chọn');
+      for (const item of items) { const ordered = order.items.find((row) => row.variantId === item.variantId); if (!ordered || item.quantity > ordered.orderedQuantity - ordered.receivedQuantity) throw new BadRequestException('SKU hoặc số lượng vượt quá phần còn chờ của đơn mua'); }
+    }
+    if (input.source === InventoryReceiptSource.CUSTOMER_RETURN) {
+      if (!input.sourceReferenceId) throw new BadRequestException('Cần chọn yêu cầu hàng trả');
+      const request = await this.prisma.afterSaleRequest.findFirst({ where: { id: input.sourceReferenceId, status: 'AWAITING_RETURN', order: orderScopeWhere(organizationId, scope) }, include: { order: { include: { items: true } } } });
+      if (!request || request.order.warehouseId !== warehouse.id) throw new BadRequestException('Hàng trả không còn chờ nhập tại kho đã chọn');
+      const existing = await this.prisma.inventoryReceipt.findFirst({ where: { source: InventoryReceiptSource.CUSTOMER_RETURN, sourceReferenceId: request.id, status: { not: InventoryReceiptStatus.CANCELLED } } });
+      if (existing) throw new ConflictException(`Hàng trả đã có phiếu ${existing.code}`);
+      const variantId = request.reasonCode.split('|SKU:')[1]?.split('|')[0];
+      if (!variantId || items.length !== 1 || items[0].variantId !== variantId || items[0].quantity !== request.quantity) throw new BadRequestException('Phiếu nhập hàng trả phải đúng SKU và số lượng của yêu cầu');
+      items = items.map((item) => ({ ...item, quarantined: true }));
+    }
+    const code = `PN-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${Date.now().toString(36).toUpperCase()}`;
+    return this.prisma.inventoryReceipt.create({ data: { organizationId, warehouseId: warehouse.id, code, source: input.source, sourceReferenceId: input.sourceReferenceId || null, note: input.note?.trim() || null, createdById: userId, items: { create: items } }, include: { warehouse: true, items: { include: { variant: { include: { product: true } } } } } });
+  }
+
+  async confirmReceipt(organizationId: string, userId: string, id: string, scope: DataScope) {
+    const receipt = await this.prisma.inventoryReceipt.findFirst({ where: { id, organizationId, status: InventoryReceiptStatus.DRAFT, warehouse: warehouseScopeWhere(organizationId, scope) }, include: { warehouse: true, items: { include: { variant: true } } } });
+    if (!receipt) throw new NotFoundException('Phiếu nhập không còn ở trạng thái chờ xác nhận');
+    return this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.inventoryReceipt.updateMany({ where: { id: receipt.id, status: InventoryReceiptStatus.DRAFT }, data: { status: InventoryReceiptStatus.CONFIRMED, confirmedById: userId, confirmedAt: new Date() } });
+      if (claimed.count !== 1) throw new ConflictException('Phiếu nhập vừa được thủ kho khác xác nhận');
+      let purchaseOrder: { id: string; warehouseId: string; items: Array<{ id: string; variantId: string; orderedQuantity: number; receivedQuantity: number }> } | null = null;
+      if (receipt.source === InventoryReceiptSource.PURCHASE_ORDER) {
+        purchaseOrder = await tx.purchaseOrder.findUnique({ where: { id: receipt.sourceReferenceId! }, include: { items: true } });
+        if (!purchaseOrder || purchaseOrder.warehouseId !== receipt.warehouseId) throw new BadRequestException('Đơn mua không hợp lệ');
+        for (const item of receipt.items) { const ordered = purchaseOrder.items.find((row) => row.variantId === item.variantId); if (!ordered || item.quantity > ordered.orderedQuantity - ordered.receivedQuantity) throw new ConflictException(`Số còn chờ của SKU ${item.variant.sku} đã thay đổi`); await tx.purchaseOrderItem.update({ where: { id: ordered.id }, data: { receivedQuantity: { increment: item.quantity } } }); }
+      }
+      let returnRequest: { id: string; orderId: string; quantity: number } | null = null;
+      if (receipt.source === InventoryReceiptSource.CUSTOMER_RETURN) {
+        returnRequest = await tx.afterSaleRequest.findFirst({ where: { id: receipt.sourceReferenceId!, status: 'AWAITING_RETURN' }, select: { id: true, orderId: true, quantity: true } });
+        if (!returnRequest) throw new ConflictException('Yêu cầu hàng trả đã được xử lý');
+      }
+      for (const item of receipt.items) {
+        await tx.inventoryBalance.upsert({ where: { warehouseId_variantId: { warehouseId: receipt.warehouseId, variantId: item.variantId } }, update: { onHand: { increment: item.quantity }, ...(item.quarantined ? { quarantined: { increment: item.quantity } } : {}) }, create: { warehouseId: receipt.warehouseId, variantId: item.variantId, onHand: item.quantity, quarantined: item.quarantined ? item.quantity : 0 } });
+        await tx.inventoryTransaction.create({ data: { warehouseId: receipt.warehouseId, variantId: item.variantId, type: item.quarantined ? InventoryTransactionType.RETURN_IN : InventoryTransactionType.RECEIPT, quantity: item.quantity, reason: `${receipt.code}${receipt.note ? ` · ${receipt.note}` : ''}`, referenceType: 'INVENTORY_RECEIPT', referenceId: receipt.id, performedById: userId } });
+      }
+      if (purchaseOrder) {
+        const updatedItems = await tx.purchaseOrderItem.findMany({ where: { purchaseOrderId: purchaseOrder.id } });
+        await tx.purchaseOrder.update({ where: { id: purchaseOrder.id }, data: { status: updatedItems.every((item) => item.receivedQuantity >= item.orderedQuantity) ? PurchaseOrderStatus.RECEIVED : PurchaseOrderStatus.PARTIALLY_RECEIVED } });
+      }
+      if (returnRequest) {
+        await tx.afterSaleRequest.update({ where: { id: returnRequest.id }, data: { status: 'COMPLETED', reasonCode: { set: `RECEIVED_BY:${receipt.code}` } } });
+        const order = await tx.salesOrder.findUniqueOrThrow({ where: { id: returnRequest.orderId }, include: { items: true, afterSales: true } });
+        const returnTypes: AfterSaleType[] = [AfterSaleType.RETURN, AfterSaleType.EXCHANGE];
+        const received = order.afterSales.filter((item) => item.status === 'COMPLETED' && returnTypes.includes(item.type)).reduce((sum, item) => sum + item.quantity, 0);
+        await tx.salesOrder.update({ where: { id: order.id }, data: { status: received >= order.items.reduce((sum, item) => sum + item.quantity, 0) ? OrderStatus.RETURNED : OrderStatus.PARTIALLY_RETURNED } });
+      }
+      await tx.auditEvent.create({ data: { organizationId, actorId: userId, category: 'INVENTORY', action: 'INVENTORY_RECEIPT_CONFIRMED', entityType: 'INVENTORY_RECEIPT', entityId: receipt.id, summary: `Xác nhận phiếu nhập ${receipt.code} tại ${receipt.warehouse.name}`, metadata: { source: receipt.source, sourceReferenceId: receipt.sourceReferenceId, itemCount: receipt.items.length, totalQuantity: receipt.items.reduce((sum, item) => sum + item.quantity, 0) } } });
+      await queueInventorySync(tx, receipt.items.map((item) => item.variantId), userId, 'INVENTORY_RECEIPT_CONFIRMED');
+      return tx.inventoryReceipt.findUnique({ where: { id: receipt.id }, include: { warehouse: true, items: { include: { variant: { include: { product: true } } } } } });
+    });
   }
 }

@@ -1,0 +1,13 @@
+CREATE TYPE "InventoryReceiptStatus" AS ENUM ('DRAFT', 'CONFIRMED', 'CANCELLED');
+CREATE TYPE "InventoryReceiptSource" AS ENUM ('PURCHASE_ORDER', 'CUSTOMER_RETURN', 'MANUAL');
+CREATE TABLE "InventoryReceipt" ("id" TEXT NOT NULL,"organizationId" TEXT NOT NULL,"warehouseId" TEXT NOT NULL,"code" TEXT NOT NULL,"source" "InventoryReceiptSource" NOT NULL,"sourceReferenceId" TEXT,"status" "InventoryReceiptStatus" NOT NULL DEFAULT 'DRAFT',"note" TEXT,"createdById" TEXT NOT NULL,"confirmedById" TEXT,"createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,"confirmedAt" TIMESTAMP(3),CONSTRAINT "InventoryReceipt_pkey" PRIMARY KEY ("id"));
+CREATE TABLE "InventoryReceiptItem" ("id" TEXT NOT NULL,"receiptId" TEXT NOT NULL,"variantId" TEXT NOT NULL,"quantity" INTEGER NOT NULL,"quarantined" BOOLEAN NOT NULL DEFAULT false,CONSTRAINT "InventoryReceiptItem_pkey" PRIMARY KEY ("id"));
+CREATE UNIQUE INDEX "InventoryReceipt_code_key" ON "InventoryReceipt"("code");
+CREATE INDEX "InventoryReceipt_organizationId_status_createdAt_idx" ON "InventoryReceipt"("organizationId", "status", "createdAt");
+CREATE INDEX "InventoryReceipt_source_sourceReferenceId_idx" ON "InventoryReceipt"("source", "sourceReferenceId");
+CREATE UNIQUE INDEX "InventoryReceiptItem_receiptId_variantId_key" ON "InventoryReceiptItem"("receiptId", "variantId");
+ALTER TABLE "InventoryReceipt" ADD CONSTRAINT "InventoryReceipt_organizationId_fkey" FOREIGN KEY ("organizationId") REFERENCES "Organization"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "InventoryReceipt" ADD CONSTRAINT "InventoryReceipt_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "InventoryReceiptItem" ADD CONSTRAINT "InventoryReceiptItem_receiptId_fkey" FOREIGN KEY ("receiptId") REFERENCES "InventoryReceipt"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "InventoryReceiptItem" ADD CONSTRAINT "InventoryReceiptItem_variantId_fkey" FOREIGN KEY ("variantId") REFERENCES "ProductVariant"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+UPDATE "Role" SET "permissions" = CASE WHEN "permissions" ? 'inventory.receive' THEN "permissions" ELSE "permissions" || '["inventory.receive"]'::jsonb END WHERE "code" = 'WAREHOUSE_STAFF';

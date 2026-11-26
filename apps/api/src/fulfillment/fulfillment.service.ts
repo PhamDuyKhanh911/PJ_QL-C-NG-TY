@@ -12,7 +12,7 @@ export class FulfillmentService {
 
   async list(organizationId: string, scope: DataScope) {
     const orders = await this.prisma.salesOrder.findMany({
-      where: { AND: [orderScopeWhere(organizationId, scope)], status: { in: [OrderStatus.CONFIRMED, OrderStatus.PACKING, OrderStatus.SHIPPED] } },
+      where: { AND: [orderScopeWhere(organizationId, scope)], status: { in: [OrderStatus.CONFIRMED, OrderStatus.PACKING, OrderStatus.SHIPPED, OrderStatus.DELIVERED] } },
       include: { channelAccount: true, warehouse: true, customer: true, items: { include: { variant: { include: { product: true } } } }, fulfillmentEvents: { orderBy: { createdAt: 'asc' } } },
       orderBy: { orderedAt: 'asc' },
     });
@@ -104,7 +104,7 @@ export class FulfillmentService {
     const warehouseId = warehouseIds[0];
     const batchCode = `BATCH-${channel.code}-${Date.now().toString(36).toUpperCase()}`;
     return this.prisma.$transaction(async (tx) => {
-      const changed = await tx.salesOrder.updateMany({ where: { id: { in: input.orderIds }, channelAccountId: channel.id, status: OrderStatus.CONFIRMED }, data: { status: OrderStatus.SHIPPED, responsibleUserId: responsibleUser.id, responsibilityAssignedAt: new Date() } });
+      const changed = await tx.salesOrder.updateMany({ where: { id: { in: input.orderIds }, channelAccountId: channel.id, status: OrderStatus.CONFIRMED }, data: { status: OrderStatus.DELIVERED, responsibleUserId: responsibleUser.id, responsibilityAssignedAt: new Date() } });
       if (changed.count !== orders.length) throw new BadRequestException('Một hoặc nhiều đơn vừa được thủ kho khác xử lý');
       const totals = new Map<string, { quantity: number; sku: string }>();
       for (const order of orders) for (const item of order.items) {
@@ -120,7 +120,7 @@ export class FulfillmentService {
         if (issued !== 1) throw new BadRequestException(`SKU ${total.sku} không đủ tồn đã giữ để xuất gộp`);
         await tx.inventoryTransaction.create({ data: { warehouseId, variantId, type: InventoryTransactionType.SALE, quantity: -total.quantity, referenceType: 'FULFILLMENT_BATCH', referenceId: batchCode, reason: `Xuất gộp ${channel.name}: ${orders.length} đơn`, performedById: warehouseKeeperId } });
       }
-      await tx.orderFulfillmentEvent.createMany({ data: orders.map((order) => ({ orderId: order.id, action: 'WAREHOUSE_BATCH_DISPATCHED', fromStatus: OrderStatus.CONFIRMED, toStatus: OrderStatus.SHIPPED, performedById: warehouseKeeperId, responsibleUserId: responsibleUser.id, carrierName: channel.name, trackingCode: order.externalOrderId, batchCode, note: `Bàn giao cho ${responsibleUser.displayName} đóng gói; phiếu ${batchCode}` })) });
+      await tx.orderFulfillmentEvent.createMany({ data: orders.map((order) => ({ orderId: order.id, action: 'WAREHOUSE_BATCH_DISPATCHED', fromStatus: OrderStatus.CONFIRMED, toStatus: OrderStatus.DELIVERED, performedById: warehouseKeeperId, responsibleUserId: responsibleUser.id, carrierName: channel.name, trackingCode: order.externalOrderId, batchCode, note: `Bàn giao cho ${responsibleUser.displayName} đóng gói; phiếu ${batchCode}` })) });
       await queueInventorySync(tx, [...totals.keys()], warehouseKeeperId, 'ONLINE_BATCH_DISPATCHED');
       return { batchCode, channel: { id: channel.id, name: channel.name, type: channel.type }, responsibleUser, orderCount: orders.length, skuTotals: [...totals.entries()].map(([variantId, item]) => ({ variantId, ...item })) };
     });
@@ -135,7 +135,7 @@ export class FulfillmentService {
     if (offline && !responsibleUser) throw new BadRequestException('Phiếu offline chưa chọn nhân viên nhận để đóng hàng');
     const officialMarketplace = order.channelAccount.type === ChannelType.SHOPEE || order.channelAccount.type === ChannelType.TIKTOK_SHOP;
     if (!offline && !officialMarketplace && (!input.carrierName || !input.trackingCode)) throw new BadRequestException('Đơn Facebook/online cần đơn vị vận chuyển và mã vận đơn');
-    const nextStatus = offline ? OrderStatus.PACKING : OrderStatus.SHIPPED;
+    const nextStatus = OrderStatus.DELIVERED;
     return this.prisma.$transaction(async (tx) => {
       const changed = await tx.salesOrder.updateMany({ where: { id: order.id, status: OrderStatus.CONFIRMED }, data: { status: nextStatus } });
       if (changed.count !== 1) throw new BadRequestException('Đơn đã được thủ kho khác xuất hoặc trạng thái đã thay đổi');

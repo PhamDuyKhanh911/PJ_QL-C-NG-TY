@@ -89,6 +89,18 @@ enum InventoryStocktakeStatus {
   CANCELLED
 }
 
+enum InventoryReceiptStatus {
+  DRAFT
+  CONFIRMED
+  CANCELLED
+}
+
+enum InventoryReceiptSource {
+  PURCHASE_ORDER
+  CUSTOMER_RETURN
+  MANUAL
+}
+
 model Organization {
   id        String   @id @default(cuid())
   name      String
@@ -104,6 +116,7 @@ model Organization {
   suppliers Supplier[]
   purchaseOrders PurchaseOrder[]
   inventoryStocktakes InventoryStocktake[]
+  inventoryReceipts InventoryReceipt[]
 }
 
 model Branch {
@@ -188,6 +201,7 @@ model ProductVariant {
   orderItems SalesOrderItem[]
   purchaseItems PurchaseOrderItem[]
   stocktakeItems InventoryStocktakeItem[]
+  receiptItems InventoryReceiptItem[]
 }
 
 model Warehouse {
@@ -202,6 +216,7 @@ model Warehouse {
   purchaseOrders PurchaseOrder[]
   channelConnections ChannelConnection[]
   stocktakes InventoryStocktake[]
+  receipts InventoryReceipt[]
   @@unique([branchId, code])
 }
 
@@ -276,6 +291,37 @@ model InventoryTransaction {
   createdAt   DateTime @default(now())
   warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
   @@index([variantId, createdAt])
+}
+
+model InventoryReceipt {
+  id                String @id @default(cuid())
+  organizationId    String
+  warehouseId       String
+  code              String @unique
+  source            InventoryReceiptSource
+  sourceReferenceId String?
+  status            InventoryReceiptStatus @default(DRAFT)
+  note              String?
+  createdById       String
+  confirmedById     String?
+  createdAt         DateTime @default(now())
+  confirmedAt       DateTime?
+  organization      Organization @relation(fields: [organizationId], references: [id])
+  warehouse         Warehouse @relation(fields: [warehouseId], references: [id])
+  items             InventoryReceiptItem[]
+  @@index([organizationId, status, createdAt])
+  @@index([source, sourceReferenceId])
+}
+
+model InventoryReceiptItem {
+  id          String @id @default(cuid())
+  receiptId   String
+  variantId   String
+  quantity    Int
+  quarantined Boolean @default(false)
+  receipt     InventoryReceipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  variant     ProductVariant @relation(fields: [variantId], references: [id])
+  @@unique([receiptId, variantId])
 }
 
 model InventoryStocktake {

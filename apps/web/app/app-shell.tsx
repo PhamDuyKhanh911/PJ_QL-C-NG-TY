@@ -15,7 +15,7 @@ const navigation: NavigationSection[] = [
     ['/after-sales', 'Hủy · hoàn · đổi trả'], ['/assisted-sales', 'Chốt đơn qua chat'],
   ] },
   { group: 'Kho & sản phẩm', items: [
-    ['/products', 'Sản phẩm'], ['/inventory', 'Kho hàng'], ['/inventory/transactions', 'Sổ giao dịch kho'],
+    ['/products', 'Sản phẩm'], ['/inventory', 'Kho hàng'], ['/inventory/receipts', 'Phiếu nhập kho'], ['/inventory/transactions', 'Sổ giao dịch kho'],
     ['/inventory/stocktakes', 'Kiểm kê kho'], ['/inventory/quarantine', 'Kiểm định hàng hoàn'],
     ['/purchasing', 'Mua hàng'],
   ] },
