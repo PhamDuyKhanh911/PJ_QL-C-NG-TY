@@ -11,6 +11,7 @@ import { InventoryService } from './inventory.service';
 import { resolveDataScope } from '../auth/data-scope';
 import { CreateStocktakeDto } from './dto/create-stocktake.dto';
 import { UpdateStocktakeItemDto } from './dto/update-stocktake-item.dto';
+import { InitializeInventoryDto } from './dto/initialize-inventory.dto';
 
 @Controller('inventory')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -20,6 +21,8 @@ export class InventoryController {
   alerts(@CurrentUser() user: AuthenticatedUser) { return this.inventory.alerts(user.organizationId, resolveDataScope(user, 'inventory.read')); }
   @Post('adjustments') @RequirePermissions('inventory.adjust')
   adjust(@CurrentUser() user: AuthenticatedUser, @Body() input: AdjustInventoryDto) { return this.inventory.adjust(user.organizationId, user.id, input, resolveDataScope(user, 'inventory.adjust')); }
+  @Post('initial-stock') @RequirePermissions('inventory.initialize')
+  initializeStock(@CurrentUser() user: AuthenticatedUser, @Body() input: InitializeInventoryDto) { return this.inventory.initializeStock(user.organizationId, user.id, input, resolveDataScope(user, 'inventory.initialize')); }
   @Get('quarantine') @RequirePermissions('inventory.read')
   quarantine(@CurrentUser() user: AuthenticatedUser) { return this.inventory.quarantine(user.organizationId, resolveDataScope(user, 'inventory.read')); }
   @Post('quarantine/inspect') @RequirePermissions('inventory.inspect_returns')

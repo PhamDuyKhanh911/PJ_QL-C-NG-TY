@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { InventoryStocktakeStatus, InventoryTransactionType } from '@prisma/client';
+import { InventoryStocktakeStatus, InventoryTransactionType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdjustInventoryDto } from './dto/adjust-inventory.dto';
 import { InspectQuarantineDto, QuarantineDecision } from './dto/inspect-quarantine.dto';
@@ -8,6 +8,7 @@ import { queueInventorySync } from '../channels/queue-inventory-sync';
 import { DataScope, warehouseScopeWhere } from '../auth/data-scope';
 import { CreateStocktakeDto } from './dto/create-stocktake.dto';
 import { UpdateStocktakeItemDto } from './dto/update-stocktake-item.dto';
+import { InitializeInventoryDto } from './dto/initialize-inventory.dto';
 
 @Injectable()
 export class InventoryService {
@@ -196,5 +197,29 @@ export class InventoryService {
       await queueInventorySync(tx, [variant.id], performedById, 'MANUAL_ADJUSTMENT');
       return balance;
     });
+  }
+
+  async initializeStock(organizationId: string, performedById: string, input: InitializeInventoryDto, scope: DataScope) {
+    const [warehouse, variant] = await Promise.all([
+      this.prisma.warehouse.findFirst({ where: { AND: [{ id: input.warehouseId }, warehouseScopeWhere(organizationId, scope)] } }),
+      this.prisma.productVariant.findFirst({ where: { id: input.variantId, product: { organizationId } }, include: { product: true } }),
+    ]);
+    if (!warehouse || !variant) throw new NotFoundException('Không tìm thấy kho hoặc SKU trong phạm vi được phép');
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const existing = await tx.inventoryBalance.findUnique({ where: { warehouseId_variantId: { warehouseId: warehouse.id, variantId: variant.id } } });
+        if (existing) throw new ConflictException('SKU đã có tồn tại kho này; hãy dùng nhập hàng, kiểm kê hoặc điều chỉnh tồn kho');
+        const balance = await tx.inventoryBalance.create({ data: { warehouseId: warehouse.id, variantId: variant.id, onHand: input.quantity } });
+        await tx.inventoryTransaction.create({ data: { warehouseId: warehouse.id, variantId: variant.id, type: InventoryTransactionType.ADJUSTMENT, quantity: input.quantity, reason: `Tồn đầu kỳ${input.note?.trim() ? ` · ${input.note.trim()}` : ''}`, referenceType: 'INITIAL_STOCK', referenceId: balance.id, performedById } });
+        await tx.auditEvent.create({ data: { organizationId, actorId: performedById, category: 'INVENTORY', action: 'INITIAL_STOCK_CREATED', entityType: 'INVENTORY_BALANCE', entityId: balance.id, summary: `Nhập tồn đầu kỳ ${input.quantity} sản phẩm cho SKU ${variant.sku} tại ${warehouse.name}`, metadata: { warehouseId: warehouse.id, warehouseName: warehouse.name, variantId: variant.id, sku: variant.sku, productName: variant.product.name, quantity: input.quantity, note: input.note?.trim() || null } } });
+        await queueInventorySync(tx, [variant.id], performedById, 'INITIAL_STOCK');
+        return balance;
+      });
+    } catch (error) {
+      if (error instanceof ConflictException) throw error;
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new ConflictException('SKU đã được nhập tồn tại kho này bởi một thao tác khác');
+      throw error;
+    }
   }
 }

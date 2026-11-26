@@ -8,6 +8,7 @@ export const PERMISSION_CATALOG = [
   { code: 'catalog.create', group: 'Sản phẩm', name: 'Tạo sản phẩm' },
   { code: 'catalog.manage', group: 'Sản phẩm', name: 'Cập nhật sản phẩm, SKU và ánh xạ seller' },
   { code: 'inventory.read', group: 'Kho', name: 'Xem tồn kho' },
+  { code: 'inventory.initialize', group: 'Kho', name: 'Nhập tồn đầu kỳ một lần cho SKU mới' },
   { code: 'inventory.adjust', group: 'Kho', name: 'Điều chỉnh tồn kho' },
   { code: 'inventory.count', group: 'Kho', name: 'Mở, nhập và chốt phiên kiểm kê thực tế' },
   { code: 'inventory.inspect_returns', group: 'Kho', name: 'Kiểm định và xử lý hàng hoàn' },

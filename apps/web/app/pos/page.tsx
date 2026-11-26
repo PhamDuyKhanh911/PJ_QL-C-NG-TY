@@ -72,7 +72,7 @@ export default function PosPage() {
 
   const selected = variants.filter((variant) => (quantities[variant.id] ?? 0) > 0 && variant.available > 0);
   const total = selected.reduce((sum, variant) => sum + Number(variant.salePrice) * quantities[variant.id], 0);
-  const canAdjust = permissions.includes('*') || permissions.includes('inventory.adjust');
+  const canAdjust = permissions.includes('*') || permissions.includes('inventory.initialize');
 
   async function initializeStock(variant: ProductVariant) {
     const quantity = Math.floor(stockDrafts[variant.id] ?? 0);
@@ -80,10 +80,10 @@ export default function PosPage() {
     if (quantity < 1) { setError('Số lượng nhập tồn phải lớn hơn 0'); return; }
     setBusy(`stock-${variant.id}`); setError(''); setNotice('');
     try {
-      const response = await fetch(`${apiUrl}/inventory/adjustments`, {
+      const response = await fetch(`${apiUrl}/inventory/initial-stock`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${localStorage.getItem('erp_access_token')}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ warehouseId, variantId: variant.id, quantity, reason: 'Nhập tồn đầu kỳ trước khi lập phiếu xuất' }),
+        body: JSON.stringify({ warehouseId, variantId: variant.id, quantity, note: 'Khởi tạo từ phiếu xuất nội bộ' }),
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(Array.isArray(payload.message) ? payload.message.join(', ') : payload.message ?? 'Không thể nhập tồn');

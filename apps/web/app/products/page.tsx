@@ -5,10 +5,12 @@ import { useRouter } from 'next/navigation';
 import './products.css';
 import './channel-mapping.css';
 import './merchandising.css';
+import './initial-stock.css';
 
 type Channel = { id: string; code: string; name: string; type: string };
 type Mapping = { id: string; externalProductId: string; externalSkuId: string; externalSku?: string; channelAccount: Channel };
-type Balance = { onHand: number; reserved: number; quarantined: number; safetyStock: number; warehouse: { name: string } };
+type Balance = { warehouseId: string; onHand: number; reserved: number; quarantined: number; safetyStock: number; warehouse: { name: string } };
+type Warehouse = { id: string; name: string; branch?: { name: string } };
 type Variant = { id: string; sku: string; barcode?: string; name: string; size?: string; color?: string; costPrice: string; salePrice: string; balances: Balance[]; mappings: Mapping[] };
 type Product = { id: string; name: string; imageUrl?: string; unit: string; active: boolean; variants: Variant[] };
 type UnmappedChannelSku = { id: string; externalProductId?: string; externalSkuId: string; reportedAvailable: number; observedAt: string; source?: string; channelAccount: Channel };
@@ -37,6 +39,7 @@ export default function ProductsPage() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [unmappedChannelSkus, setUnmappedChannelSkus] = useState<UnmappedChannelSku[]>([]);
   const [permissions, setPermissions] = useState<string[]>([]);
+  const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('ACTIVE');
   const [dialog, setDialog] = useState<Dialog>(null);
@@ -48,11 +51,12 @@ export default function ProductsPage() {
     const token = localStorage.getItem('erp_access_token');
     if (!token) { router.replace('/login'); return; }
     const headers = { Authorization: `Bearer ${token}` };
-    const [productsResponse, channelsResponse, userResponse, unmappedResponse] = await Promise.all([
+    const [productsResponse, channelsResponse, userResponse, unmappedResponse, warehousesResponse] = await Promise.all([
       fetch(`${apiUrl}/catalog/products?includeInactive=true`, { headers }),
       fetch(`${apiUrl}/catalog/channels`, { headers }),
       fetch(`${apiUrl}/auth/me`, { headers }),
       fetch(`${apiUrl}/catalog/unmapped-channel-skus`, { headers }),
+      fetch(`${apiUrl}/inventory/warehouses`, { headers }),
     ]);
     if ([productsResponse, channelsResponse, userResponse, unmappedResponse].some((response) => response.status === 401)) {
       localStorage.removeItem('erp_access_token');
@@ -64,6 +68,7 @@ export default function ProductsPage() {
     setChannels(await channelsResponse.json());
     setPermissions(((await userResponse.json()) as CurrentUser).permissions);
     setUnmappedChannelSkus(await unmappedResponse.json());
+    setWarehouses(warehousesResponse.ok ? await warehousesResponse.json() : []);
   }, [router]);
 
   useEffect(() => {
@@ -79,6 +84,7 @@ export default function ProductsPage() {
 
   const canCreate = permissions.includes('*') || permissions.includes('catalog.create');
   const canManage = permissions.includes('*') || permissions.includes('catalog.manage');
+  const canInitialize = permissions.includes('*') || permissions.includes('inventory.initialize');
   const onlineChannels = channels.filter((channel) => channel.type !== 'OFFLINE_STORE');
   const visibleProducts = useMemo(() => products.filter((product) => {
     const matchesStatus = status === 'ALL' || (status === 'ACTIVE' ? product.active : !product.active);
@@ -119,6 +125,9 @@ export default function ProductsPage() {
   async function saveProduct(event: FormEvent<HTMLFormElement>, product?: Product) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const initialQuantity = !product ? Math.floor(Number(form.get('initialQuantity') ?? 0)) : 0;
+    const initialWarehouseId = !product ? String(form.get('initialWarehouseId') ?? '') : '';
+    if (initialQuantity > 0 && !initialWarehouseId) { setError('Cần chọn kho khi nhập số lượng tồn đầu kỳ'); return; }
     const file = form.get('image');
     const selectedImage = file instanceof File && file.size > 0 ? file : null;
     if (selectedImage && !['image/jpeg', 'image/png', 'image/webp'].includes(selectedImage.type)) { setError('Chỉ hỗ trợ ảnh JPG, PNG hoặc WebP'); return; }
@@ -135,6 +144,17 @@ export default function ProductsPage() {
       const saved = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(Array.isArray(saved.message) ? saved.message[0] : saved.message ?? 'Không thể lưu sản phẩm');
       const productId = product?.id ?? saved.id;
+      if (!product) {
+        if (initialQuantity > 0) {
+          const stockResponse = await fetch(`${apiUrl}/inventory/initial-stock`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${localStorage.getItem('erp_access_token')}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ warehouseId: initialWarehouseId, variantId: saved.variants?.[0]?.id, quantity: initialQuantity, note: String(form.get('initialNote') ?? '') }),
+          });
+          const stockResult = await stockResponse.json().catch(() => ({}));
+          if (!stockResponse.ok) throw new Error(`Sản phẩm đã tạo nhưng chưa nhập tồn đầu kỳ: ${Array.isArray(stockResult.message) ? stockResult.message[0] : stockResult.message ?? 'không thể ghi nhận tồn kho'}`);
+        }
+      }
       if (selectedImage) {
         const upload = new FormData();
         upload.set('image', selectedImage);
@@ -252,7 +272,7 @@ export default function ProductsPage() {
       </section>
 
       {dialog && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) closeDialog(); }}>
-        {dialog.type === 'CREATE_PRODUCT' && <form className="product-modal" onSubmit={(event) => saveProduct(event)}><div className="modal-title"><div><h2>Thêm sản phẩm</h2><span>Tạo sản phẩm cùng SKU đầu tiên</span></div><button type="button" onClick={() => setDialog(null)}>×</button></div><ProductFields /><VariantFields /><button className="save" disabled={saving}>{saving ? 'Đang tải ảnh và lưu...' : 'Tạo sản phẩm'}</button></form>}
+        {dialog.type === 'CREATE_PRODUCT' && <form className="product-modal" onSubmit={(event) => saveProduct(event)}><div className="modal-title"><div><h2>Thêm sản phẩm</h2><span>Tạo sản phẩm cùng SKU đầu tiên</span></div><button type="button" onClick={() => setDialog(null)}>×</button></div><ProductFields /><VariantFields />{canInitialize && <InitialStockFields warehouses={warehouses} />}<button className="save" disabled={saving}>{saving ? 'Đang tải ảnh và lưu...' : 'Tạo sản phẩm'}</button></form>}
         {dialog.type === 'EDIT_PRODUCT' && <form className="product-modal" onSubmit={(event) => saveProduct(event, dialog.product)}><div className="modal-title"><div><h2>Thông tin sản phẩm</h2><span>Ảnh đại diện tải trực tiếp từ máy tính</span></div><button type="button" onClick={() => setDialog(null)}>×</button></div><ProductFields product={dialog.product} /><button className="save" disabled={saving}>{saving ? 'Đang tải ảnh và lưu...' : 'Lưu sản phẩm'}</button></form>}
         {dialog.type === 'ADD_VARIANT' && <form className="product-modal" onSubmit={(event) => addVariant(event, dialog.product.id)}><div className="modal-title"><div><h2>Thêm SKU</h2><span>{dialog.product.name}</span></div><button type="button" onClick={() => setDialog(null)}>×</button></div><VariantFields /><button className="save" disabled={saving}>{saving ? 'Đang lưu...' : 'Thêm SKU'}</button></form>}
         {dialog.type === 'EDIT_VARIANT' && <form className="product-modal" onSubmit={(event) => editVariant(event, dialog.variant.id)}><div className="modal-title"><div><h2>Cập nhật SKU</h2><span>{dialog.variant.sku}</span></div><button type="button" onClick={() => setDialog(null)}>×</button></div><VariantFields variant={dialog.variant} /><button className="save" disabled={saving}>{saving ? 'Đang lưu...' : 'Lưu thay đổi'}</button></form>}
@@ -277,4 +297,8 @@ function ProductFields({ product }: { product?: Product }) {
 
 function VariantFields({ variant }: { variant?: Variant }) {
   return <div className="variant-fields"><label>SKU nội bộ<input name="sku" defaultValue={variant?.sku} minLength={2} required /></label><label>Tên biến thể<input name="name" defaultValue={variant?.name} required /></label><label>Size / Kích cỡ<input name="size" defaultValue={variant?.size} placeholder="S, M, L, 38, 39..." /></label><label>Màu sắc<input name="color" defaultValue={variant?.color} placeholder="Đen, Trắng, Xanh..." /></label><label>Mã vạch<input name="barcode" defaultValue={variant?.barcode} /></label><label>Giá vốn<input name="costPrice" type="number" min={0} step={1000} defaultValue={variant?.costPrice ?? 0} required /></label><label>Giá bán<input name="salePrice" type="number" min={0} step={1000} defaultValue={variant?.salePrice ?? 0} required /></label></div>;
+}
+
+function InitialStockFields({ warehouses }: { warehouses: Warehouse[] }) {
+  return <fieldset className="initial-stock-fields"><legend>Tồn đầu kỳ (không bắt buộc)</legend><p>Chỉ dùng khi đưa SKU mới lên hệ thống. Mỗi SKU chỉ được nhập một lần tại từng kho và hệ thống sẽ lưu người thao tác.</p><div><label>Kho nhập<select name="initialWarehouseId" defaultValue=""><option value="">Chọn kho khi có số lượng</option>{warehouses.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}{warehouse.branch?.name ? ` · ${warehouse.branch.name}` : ''}</option>)}</select></label><label>Số lượng đầu kỳ<input name="initialQuantity" type="number" min="0" step="1" defaultValue="0" /></label></div><label>Ghi chú<input name="initialNote" maxLength={250} placeholder="Ví dụ: Kiểm đếm khi bắt đầu sử dụng hệ thống" /></label></fieldset>;
 }
