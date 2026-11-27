@@ -78,8 +78,8 @@ export class InventoryService {
     if (!warehouse) throw new NotFoundException('Không tìm thấy kho trong phạm vi được giao');
     const active = await this.prisma.inventoryStocktake.findFirst({ where: { organizationId, warehouseId: warehouse.id, status: InventoryStocktakeStatus.DRAFT }, select: { code: true } });
     if (active) throw new ConflictException(`Kho đang có phiên ${active.code} chưa chốt hoặc hủy`);
-    const balances = await this.prisma.inventoryBalance.findMany({ where: { warehouseId: warehouse.id }, select: { variantId: true, onHand: true } });
-    if (!balances.length) throw new BadRequestException('Kho chưa có SKU để kiểm kê');
+    const balances = await this.prisma.inventoryBalance.findMany({ where: { warehouseId: warehouse.id, variantId: { in: input.variantIds } }, select: { variantId: true, onHand: true } });
+    if (balances.length !== input.variantIds.length) throw new BadRequestException('Có SKU không tồn tại trong kho đã chọn');
     const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
     const code = `KK-${warehouse.code}-${stamp}`;
     const created = await this.prisma.$transaction(async (tx) => {
