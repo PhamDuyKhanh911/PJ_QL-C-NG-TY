@@ -4,8 +4,8 @@
 .global-brand>span{width:38px;height:38px;flex:0 0 38px;display:grid;place-items:center;border-radius:10px;background:#4f6ee8;color:#fff;font-size:21px;font-weight:800}
 .global-brand b,.global-brand small{display:block}.global-brand b{font-size:14px;letter-spacing:.8px}.global-brand small{color:#8f9ab0;font-size:10px;margin-top:3px}
 .global-sidebar nav{flex:1;overflow-y:auto;padding:12px 10px 18px;scrollbar-width:thin;scrollbar-color:#394660 transparent}
-.global-sidebar nav section{margin-bottom:12px}.global-sidebar nav h2{margin:0;padding:7px 10px 5px;color:#748097;font-size:9px;letter-spacing:1px;text-transform:uppercase;white-space:nowrap;overflow:hidden}
-.global-sidebar nav a{height:38px;display:flex;align-items:center;gap:10px;padding:0 11px;border-radius:8px;color:#b7c0d1;text-decoration:none;font-size:12px;white-space:nowrap;overflow:hidden}
+.global-sidebar nav section{margin-bottom:5px}.global-section-toggle{width:100%;height:40px;display:flex;align-items:center;gap:10px;padding:0 11px;border:0;border-radius:8px;background:transparent;color:#93a0b8;font-size:11px;font-weight:800;letter-spacing:.35px;text-align:left;text-transform:uppercase;white-space:nowrap;overflow:hidden;cursor:pointer}.global-section-toggle:hover,.global-sidebar nav section.current>.global-section-toggle{background:#1a253a;color:#e8ecf4}.global-section-toggle i{width:22px;flex:0 0 22px;font-style:normal;text-align:center;color:#7f91b5}.global-section-toggle span{overflow:hidden;text-overflow:ellipsis}.global-section-toggle b{margin-left:auto;font-size:15px;font-weight:500;color:#7f8ba2}.global-section-items{margin:2px 0 7px 22px;padding-left:7px;border-left:1px solid #2c3850}
+.global-sidebar nav a{height:35px;display:flex;align-items:center;gap:8px;padding:0 9px;border-radius:8px;color:#b7c0d1;text-decoration:none;font-size:12px;white-space:nowrap;overflow:hidden}
 .global-sidebar nav a:hover,.global-sidebar nav a.active{background:#26324b;color:#fff}.global-sidebar nav a.active{box-shadow:inset 3px 0 #6f89f0}
 .global-sidebar nav a i,.global-logout i{width:22px;flex:0 0 22px;font-style:normal;text-align:center;color:#91a2c5;font-size:11px;font-weight:800}
 .global-sidebar nav a.active i{color:#fff}
@@ -15,15 +15,15 @@
 .global-content{min-width:0;margin-left:250px;transition:margin-left .2s ease}.global-content>main{margin-left:0;width:100%}
 .global-menu-backdrop{display:none}
 .global-shell.menu-collapsed .global-sidebar{width:74px}.global-shell.menu-collapsed .global-content{margin-left:74px}.global-shell.menu-collapsed .global-menu-toggle{left:17px}
-.global-shell.menu-collapsed .global-brand{padding:0 18px}.global-shell.menu-collapsed .global-brand>div,.global-shell.menu-collapsed .global-sidebar nav h2,.global-shell.menu-collapsed .global-sidebar nav a span,.global-shell.menu-collapsed .global-logout span{display:none}
-.global-shell.menu-collapsed .global-sidebar nav{padding-left:9px;padding-right:9px}.global-shell.menu-collapsed .global-sidebar nav a{justify-content:center;padding:0}.global-shell.menu-collapsed .global-sidebar nav a i{font-size:12px}.global-shell.menu-collapsed .global-logout{justify-content:center;padding:0}
+.global-shell.menu-collapsed .global-brand{padding:0 18px}.global-shell.menu-collapsed .global-brand>div,.global-shell.menu-collapsed .global-section-toggle span,.global-shell.menu-collapsed .global-section-toggle b,.global-shell.menu-collapsed .global-sidebar nav a span,.global-shell.menu-collapsed .global-logout span{display:none}
+.global-shell.menu-collapsed .global-sidebar nav{padding-left:9px;padding-right:9px}.global-shell.menu-collapsed .global-section-toggle{justify-content:center;padding:0}.global-shell.menu-collapsed .global-section-items{margin-left:0;padding-left:0;border-left:0}.global-shell.menu-collapsed .global-sidebar nav a{justify-content:center;padding:0}.global-shell.menu-collapsed .global-sidebar nav a i{font-size:12px}.global-shell.menu-collapsed .global-logout{justify-content:center;padding:0}
 @media(max-width:760px){
   .global-sidebar,.global-shell.menu-collapsed .global-sidebar{width:250px;transform:translateX(-100%)}
   .global-content,.global-shell.menu-collapsed .global-content{margin-left:0;padding-top:54px}
   .global-menu-toggle,.global-shell.menu-collapsed .global-menu-toggle{left:12px;top:8px}
   .global-shell.menu-open .global-sidebar{transform:translateX(0)}.global-shell.menu-open .global-menu-toggle{left:194px}
-  .global-shell.menu-open .global-brand>div,.global-shell.menu-open .global-sidebar nav h2,.global-shell.menu-open .global-sidebar nav a span,.global-shell.menu-open .global-logout span{display:block}
-  .global-shell.menu-open .global-sidebar nav a{justify-content:flex-start;padding:0 11px}.global-shell.menu-open .global-logout{justify-content:flex-start;padding:0 21px}
+  .global-shell.menu-open .global-brand>div,.global-shell.menu-open .global-section-toggle span,.global-shell.menu-open .global-section-toggle b,.global-shell.menu-open .global-sidebar nav a span,.global-shell.menu-open .global-logout span{display:block}
+  .global-shell.menu-open .global-section-toggle{justify-content:flex-start;padding:0 11px}.global-shell.menu-open .global-section-toggle b{margin-left:auto}.global-shell.menu-open .global-section-items{margin-left:22px;padding-left:7px;border-left:1px solid #2c3850}.global-shell.menu-open .global-sidebar nav a{justify-content:flex-start;padding:0 9px}.global-shell.menu-open .global-logout{justify-content:flex-start;padding:0 21px}
   .global-shell.menu-open .global-menu-backdrop{display:block;position:fixed;z-index:45;inset:0;border:0;border-radius:0;padding:0;background:#0a122066}
 }
 @media print{.global-sidebar,.global-menu-toggle,.global-menu-backdrop{display:none!important}.global-content{margin:0!important;padding:0!important}}
