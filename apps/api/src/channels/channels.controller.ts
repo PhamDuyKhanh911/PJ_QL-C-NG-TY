@@ -10,11 +10,12 @@ import { UpdateChannelConnectionDto } from './dto/update-channel-connection.dto'
 import { ChannelOAuthService } from './channel-oauth.service';
 import { ChannelOrderSyncService } from './channel-order-sync.service';
 import { assertChannelScope, assertOrganizationScope, resolveDataScope } from '../auth/data-scope';
+import { SelectFacebookPageDto } from './dto/select-facebook-page.dto';
 
 @Controller('channels')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class ChannelsController {
-  constructor(private readonly channels: ChannelsService, private readonly orderSync: ChannelOrderSyncService) {}
+  constructor(private readonly channels: ChannelsService, private readonly orderSync: ChannelOrderSyncService, private readonly oauth: ChannelOAuthService) {}
 
   @Get() @RequirePermissions('channels.read')
   list(@CurrentUser() user: AuthenticatedUser) { return this.channels.list(user.organizationId, resolveDataScope(user, 'channels.read')); }
@@ -57,6 +58,18 @@ export class ChannelsController {
   startOAuth(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     assertChannelScope(resolveDataScope(user, 'channels.manage'), id);
     return this.channels.startOAuth(user.organizationId, user.id, id);
+  }
+
+  @Get(':id/oauth/facebook/pages/:sessionId') @RequirePermissions('channels.manage')
+  facebookPages(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Param('sessionId') sessionId: string) {
+    assertChannelScope(resolveDataScope(user, 'channels.manage'), id);
+    return this.oauth.facebookPages(user.organizationId, user.id, id, sessionId);
+  }
+
+  @Post(':id/oauth/facebook/select') @RequirePermissions('channels.manage')
+  selectFacebookPage(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() input: SelectFacebookPageDto) {
+    assertChannelScope(resolveDataScope(user, 'channels.manage'), id);
+    return this.oauth.selectFacebookPage(user.organizationId, user.id, id, input.sessionId, input.pageId);
   }
 
   @Post('process-pending') @RequirePermissions('channels.sync')

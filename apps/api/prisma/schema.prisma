@@ -429,6 +429,7 @@ model ChannelOAuthSession {
   createdById      String
   consumedAt       DateTime?
   errorMessage     String?
+  providerDataEncrypted String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
   channelAccount   SalesChannelAccount @relation(fields: [channelAccountId], references: [id])

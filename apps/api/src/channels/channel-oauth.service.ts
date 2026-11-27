@@ -6,13 +6,16 @@ import { ChannelCredentialCipherService } from './channel-credential-cipher.serv
 
 type OAuthTokenResult = {
   accessToken: string;
-  refreshToken: string;
+  refreshToken?: string;
   accessTokenExpiresAt: Date;
   refreshTokenExpiresAt?: Date;
   grantedScopes: string[];
   accountIdentifier: string;
   externalShopId?: string;
 };
+
+type FacebookPageGrant = { id: string; name: string; accessToken: string; tasks: string[] };
+type FacebookPendingGrant = { pages: FacebookPageGrant[]; accessTokenExpiresAt: string; grantedScopes: string[] };
 
 @Injectable()
 export class ChannelOAuthService {
@@ -27,7 +30,8 @@ export class ChannelOAuthService {
       include: { connection: true },
     });
     if (!channel) throw new NotFoundException('Không tìm thấy seller đang hoạt động');
-    if (channel.type !== ChannelType.SHOPEE && channel.type !== ChannelType.TIKTOK_SHOP) throw new BadRequestException('OAuth seller hiện chỉ áp dụng cho Shopee và TikTok Shop');
+    const oauthProviders: ChannelType[] = [ChannelType.SHOPEE, ChannelType.TIKTOK_SHOP, ChannelType.FACEBOOK_MESSENGER];
+    if (!oauthProviders.includes(channel.type)) throw new BadRequestException('Kênh này chưa hỗ trợ đăng nhập OAuth');
     if (!channel.connection?.clientId || !channel.connection.clientSecretEncrypted) throw new BadRequestException('Cần lưu App/Partner ID và khóa bí mật trước khi kết nối OAuth');
     if (channel.type === ChannelType.TIKTOK_SHOP && !channel.connection.authorizationIdentifier) throw new BadRequestException('TikTok Shop cần Service ID hoặc Authorization URL từ Partner Center');
 
@@ -39,7 +43,9 @@ export class ChannelOAuthService {
     const clientSecret = this.credentials.decrypt(channel.connection.clientSecretEncrypted);
     const authorizationUrl = channel.type === ChannelType.SHOPEE
       ? this.shopeeAuthorizationUrl(channel.connection, clientSecret, providerCallbackUrl)
-      : this.tiktokAuthorizationUrl(channel.connection.authorizationIdentifier!, state);
+      : channel.type === ChannelType.TIKTOK_SHOP
+        ? this.tiktokAuthorizationUrl(channel.connection.authorizationIdentifier!, state)
+        : this.facebookAuthorizationUrl(channel.connection.clientId, callbackBase, state);
     await this.prisma.channelOAuthSession.updateMany({
       where: { channelAccountId: channel.id, status: 'PENDING' },
       data: { status: 'SUPERSEDED', consumedAt: new Date() },
@@ -75,30 +81,26 @@ export class ChannelOAuthService {
       const connection = session.channelAccount.connection;
       if (!connection?.clientId || !connection.clientSecretEncrypted) throw new Error('Cấu hình ứng dụng không còn hợp lệ');
       const secret = this.credentials.decrypt(connection.clientSecretEncrypted);
-      const token = session.provider === ChannelType.SHOPEE
-        ? await this.exchangeShopee(connection, secret, code, input.shopId)
-        : await this.exchangeTikTok(connection, secret, code);
-      await this.prisma.$transaction([
-        this.prisma.channelConnection.update({
-          where: { id: connection.id },
-          data: {
-            accountIdentifier: token.accountIdentifier,
-            accessTokenEncrypted: this.credentials.encrypt(token.accessToken),
-            refreshTokenEncrypted: this.credentials.encrypt(token.refreshToken),
-            accessTokenExpiresAt: token.accessTokenExpiresAt,
-            refreshTokenExpiresAt: token.refreshTokenExpiresAt ?? null,
-            grantedScopes: token.grantedScopes,
-            lastTokenRefreshAt: new Date(),
-            tokenRefreshStatus: 'SUCCEEDED',
-            tokenRefreshLeaseUntil: null,
-            status: ChannelConnectionStatus.READY,
-            lastCheckedAt: new Date(),
-            lastError: null,
-          },
-        }),
-        this.prisma.salesChannelAccount.update({ where: { id: channelAccountId }, data: { externalShopId: token.externalShopId ?? token.accountIdentifier } }),
-        this.prisma.channelOAuthSession.update({ where: { id: session.id }, data: { status: 'COMPLETED', errorMessage: null } }),
-      ]);
+      if (session.provider === ChannelType.FACEBOOK_MESSENGER) {
+        const grant = await this.exchangeFacebook(connection.clientId, secret, code, session.callbackUrl);
+        const preferred = grant.pages.find((page) => page.id === connection.accountIdentifier);
+        const selected = preferred ?? (grant.pages.length === 1 ? grant.pages[0] : null);
+        if (!selected) {
+          const pending: FacebookPendingGrant = { pages: grant.pages, accessTokenExpiresAt: grant.accessTokenExpiresAt.toISOString(), grantedScopes: grant.grantedScopes };
+          await this.prisma.channelOAuthSession.update({ where: { id: session.id }, data: { status: 'AWAITING_SELECTION', providerDataEncrypted: this.credentials.encrypt(JSON.stringify(pending)), errorMessage: null } });
+          webUrl.searchParams.set('oauth', 'select_page');
+          webUrl.searchParams.set('channelId', channelAccountId);
+          webUrl.searchParams.set('sessionId', session.id);
+          return { success: true, selectionRequired: true, redirectUrl: webUrl.toString() };
+        }
+        await this.subscribeFacebookPage(selected);
+        await this.persistToken(session, this.facebookToken(selected, grant.accessTokenExpiresAt, grant.grantedScopes));
+      } else {
+        const token = session.provider === ChannelType.SHOPEE
+          ? await this.exchangeShopee(connection, secret, code, input.shopId)
+          : await this.exchangeTikTok(connection, secret, code);
+        await this.persistToken(session, token);
+      }
       webUrl.searchParams.set('oauth', 'success');
       webUrl.searchParams.set('channelId', channelAccountId);
       return { success: true, redirectUrl: webUrl.toString() };
@@ -106,6 +108,28 @@ export class ChannelOAuthService {
       const message = (error instanceof Error ? error.message : 'Không thể hoàn tất OAuth').slice(0, 500);
       await this.prisma.channelOAuthSession.update({ where: { id: session.id }, data: { status: 'FAILED', errorMessage: message } });
       return this.failure(webUrl, channelAccountId, message);
+    }
+  }
+
+  async facebookPages(organizationId: string, userId: string, channelAccountId: string, sessionId: string) {
+    const { session, grant } = await this.facebookPendingGrant(organizationId, userId, channelAccountId, sessionId);
+    return { sessionId: session.id, pages: grant.pages.map((page) => ({ id: page.id, name: page.name, tasks: page.tasks })) };
+  }
+
+  async selectFacebookPage(organizationId: string, userId: string, channelAccountId: string, sessionId: string, pageId: string) {
+    const { session, grant } = await this.facebookPendingGrant(organizationId, userId, channelAccountId, sessionId);
+    const page = grant.pages.find((item) => item.id === pageId);
+    if (!page) throw new BadRequestException('Page Facebook không thuộc phiên cấp quyền này');
+    const claimed = await this.prisma.channelOAuthSession.updateMany({ where: { id: session.id, status: 'AWAITING_SELECTION' }, data: { status: 'PROCESSING_SELECTION' } });
+    if (!claimed.count) throw new BadRequestException('Page Facebook đang được xử lý hoặc phiên đã hoàn tất');
+    try {
+      await this.subscribeFacebookPage(page);
+      await this.persistToken(session, this.facebookToken(page, new Date(grant.accessTokenExpiresAt), grant.grantedScopes));
+      return { success: true, page: { id: page.id, name: page.name } };
+    } catch (error) {
+      const message = (error instanceof Error ? error.message : 'Không thể liên kết Page Facebook').slice(0, 500);
+      await this.prisma.channelOAuthSession.update({ where: { id: session.id }, data: { status: 'FAILED', errorMessage: message } });
+      throw new BadRequestException(message);
     }
   }
 
@@ -135,6 +159,18 @@ export class ChannelOAuthService {
     }
     if (!url.searchParams.get('service_id')) throw new BadRequestException('Authorization URL TikTok Shop thiếu service_id');
     url.searchParams.set('state', state);
+    return url.toString();
+  }
+
+  private facebookAuthorizationUrl(clientId: string, callbackUrl: string, state: string) {
+    const version = process.env.META_GRAPH_VERSION ?? 'v27.0';
+    const url = new URL(`https://www.facebook.com/${version}/dialog/oauth`);
+    url.searchParams.set('client_id', clientId);
+    url.searchParams.set('redirect_uri', callbackUrl);
+    url.searchParams.set('state', state);
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('display', 'popup');
+    url.searchParams.set('scope', 'pages_show_list,pages_manage_metadata,pages_read_engagement,pages_messaging');
     return url.toString();
   }
 
@@ -182,6 +218,91 @@ export class ChannelOAuthService {
       accessTokenExpiresAt: this.expiry(data.access_token_expire_in, 7 * 86_400),
       refreshTokenExpiresAt: this.expiry(data.refresh_token_expire_in, 365 * 86_400),
     };
+  }
+
+  private async exchangeFacebook(clientId: string, secret: string, code: string, callbackUrl: string) {
+    const version = process.env.META_GRAPH_VERSION ?? 'v27.0';
+    const graph = `https://graph.facebook.com/${version}`;
+    const shortUrl = new URL(`${graph}/oauth/access_token`);
+    shortUrl.searchParams.set('client_id', clientId);
+    shortUrl.searchParams.set('client_secret', secret);
+    shortUrl.searchParams.set('redirect_uri', callbackUrl);
+    shortUrl.searchParams.set('code', code);
+    const shortPayload = this.objectValue(await this.fetchJson(shortUrl, { method: 'GET' }));
+    const shortToken = this.stringValue(shortPayload.access_token);
+    if (!shortToken) throw new Error('Facebook không trả access token');
+
+    const longUrl = new URL(`${graph}/oauth/access_token`);
+    longUrl.searchParams.set('grant_type', 'fb_exchange_token');
+    longUrl.searchParams.set('client_id', clientId);
+    longUrl.searchParams.set('client_secret', secret);
+    longUrl.searchParams.set('fb_exchange_token', shortToken);
+    const longPayload = this.objectValue(await this.fetchJson(longUrl, { method: 'GET' }));
+    const userToken = this.stringValue(longPayload.access_token) || shortToken;
+    const accessTokenExpiresAt = new Date(Date.now() + Math.max(3_600, Number(longPayload.expires_in || shortPayload.expires_in) || 5_184_000) * 1_000);
+
+    const permissionUrl = new URL(`${graph}/me/permissions`);
+    permissionUrl.searchParams.set('access_token', userToken);
+    const permissionPayload = this.objectValue(await this.fetchJson(permissionUrl, { method: 'GET' }));
+    const permissions = Array.isArray(permissionPayload.data) ? permissionPayload.data.map((item) => this.objectValue(item)).filter((item) => item.status === 'granted').map((item) => this.stringValue(item.permission)).filter(Boolean) : [];
+    const required = ['pages_show_list', 'pages_manage_metadata', 'pages_read_engagement', 'pages_messaging'];
+    const missing = required.filter((scope) => !permissions.includes(scope));
+    if (missing.length) throw new Error(`Facebook chưa cấp đủ quyền: ${missing.join(', ')}`);
+
+    const pagesUrl = new URL(`${graph}/me/accounts`);
+    pagesUrl.searchParams.set('fields', 'id,name,access_token,tasks');
+    pagesUrl.searchParams.set('limit', '100');
+    pagesUrl.searchParams.set('access_token', userToken);
+    const pagePayload = this.objectValue(await this.fetchJson(pagesUrl, { method: 'GET' }));
+    const pages: FacebookPageGrant[] = Array.isArray(pagePayload.data) ? pagePayload.data.map((item) => this.objectValue(item)).map((item) => ({ id: this.stringValue(item.id), name: this.stringValue(item.name), accessToken: this.stringValue(item.access_token), tasks: Array.isArray(item.tasks) ? item.tasks.filter((task): task is string => typeof task === 'string') : [] })).filter((page) => page.id && page.accessToken) : [];
+    if (!pages.length) throw new Error('Tài khoản Facebook không trả Page nào có quyền quản lý tin nhắn');
+    return { pages, accessTokenExpiresAt, grantedScopes: permissions };
+  }
+
+  private async subscribeFacebookPage(page: FacebookPageGrant) {
+    const version = process.env.META_GRAPH_VERSION ?? 'v27.0';
+    const url = new URL(`https://graph.facebook.com/${version}/${encodeURIComponent(page.id)}/subscribed_apps`);
+    url.searchParams.set('subscribed_fields', 'messages,messaging_postbacks,message_deliveries,message_reads');
+    url.searchParams.set('access_token', page.accessToken);
+    const payload = this.objectValue(await this.fetchJson(url, { method: 'POST' }));
+    if (payload.success !== true) throw new Error(`Không thể đăng ký webhook cho Page ${page.name}`);
+  }
+
+  private facebookToken(page: FacebookPageGrant, accessTokenExpiresAt: Date, grantedScopes: string[]): OAuthTokenResult {
+    return { accessToken: page.accessToken, accessTokenExpiresAt, grantedScopes, accountIdentifier: page.id, externalShopId: page.id };
+  }
+
+  private async facebookPendingGrant(organizationId: string, userId: string, channelAccountId: string, sessionId: string) {
+    const session = await this.prisma.channelOAuthSession.findFirst({ where: { id: sessionId, channelAccountId, createdById: userId, provider: ChannelType.FACEBOOK_MESSENGER, status: 'AWAITING_SELECTION', channelAccount: { organizationId } }, include: { channelAccount: { include: { connection: true } } } });
+    if (!session?.providerDataEncrypted) throw new NotFoundException('Không tìm thấy phiên chọn Page Facebook');
+    if (session.expiresAt <= new Date()) throw new BadRequestException('Phiên chọn Page Facebook đã hết hạn');
+    let grant: FacebookPendingGrant;
+    try { grant = JSON.parse(this.credentials.decrypt(session.providerDataEncrypted)) as FacebookPendingGrant; }
+    catch { throw new BadRequestException('Dữ liệu cấp quyền Facebook không hợp lệ'); }
+    if (!Array.isArray(grant.pages) || !grant.pages.length) throw new BadRequestException('Facebook không trả Page có thể liên kết');
+    return { session, grant };
+  }
+
+  private async persistToken(session: { id: string; provider: ChannelType; channelAccountId: string; createdById: string; channelAccount: { organizationId: string; name: string; connection: { id: string; webhookSecretEncrypted: string | null } | null } }, token: OAuthTokenResult) {
+    const connection = session.channelAccount.connection;
+    if (!connection) throw new Error('Cấu hình kết nối không còn tồn tại');
+    const facebookNeedsWebhookSecret = session.provider === ChannelType.FACEBOOK_MESSENGER && !connection.webhookSecretEncrypted;
+    await this.prisma.$transaction([
+      this.prisma.channelConnection.update({ where: { id: connection.id }, data: {
+        accountIdentifier: token.accountIdentifier,
+        accessTokenEncrypted: this.credentials.encrypt(token.accessToken),
+        refreshTokenEncrypted: token.refreshToken ? this.credentials.encrypt(token.refreshToken) : null,
+        accessTokenExpiresAt: token.accessTokenExpiresAt,
+        refreshTokenExpiresAt: token.refreshTokenExpiresAt ?? null,
+        grantedScopes: token.grantedScopes,
+        lastTokenRefreshAt: new Date(), tokenRefreshStatus: 'SUCCEEDED', tokenRefreshLeaseUntil: null,
+        status: facebookNeedsWebhookSecret ? ChannelConnectionStatus.INCOMPLETE : ChannelConnectionStatus.READY,
+        lastCheckedAt: new Date(), lastError: facebookNeedsWebhookSecret ? 'Thiếu Webhook Secret để xác minh callback Facebook' : null,
+      } }),
+      this.prisma.salesChannelAccount.update({ where: { id: session.channelAccountId }, data: { externalShopId: token.externalShopId ?? token.accountIdentifier } }),
+      this.prisma.channelOAuthSession.update({ where: { id: session.id }, data: { status: 'COMPLETED', providerDataEncrypted: null, errorMessage: null } }),
+      this.prisma.auditEvent.create({ data: { organizationId: session.channelAccount.organizationId, actorId: session.createdById, category: 'CHANNEL', action: 'CHANNEL_OAUTH_CONNECTED', entityType: 'SALES_CHANNEL_ACCOUNT', entityId: session.channelAccountId, summary: `Cấp quyền ${session.channelAccount.name} thành công`, metadata: { provider: session.provider, accountIdentifier: token.accountIdentifier, grantedScopes: token.grantedScopes } } }),
+    ]);
   }
 
   private async tiktokAuthorizedShop(configuredBase: string | null, appKey: string, secret: string, accessToken: string, preferred: string | null) {

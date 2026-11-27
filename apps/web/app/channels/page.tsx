@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import './channels.css';
 import './inventory-issues.css';
+import './facebook-oauth.css';
 
 type SyncRun = { id: string; status: string; direction: string; mappedSkuCount: number; processedCount: number; failedCount: number; startedAt: string };
 type Connection = {
@@ -42,11 +43,14 @@ type Connection = {
 type WarehouseOption = { id: string; code: string; name: string; branch: { name: string } };
 type Channel = { id: string; code: string; name: string; type: string; active: boolean; mappedSkuCount: number; availableUnits: number; orderCount: number; conversationCount: number; inventoryIssueCount: number; recentSyncs: SyncRun[]; warehouseOptions: WarehouseOption[]; connection: Connection };
 type CurrentUser = { permissions: string[] };
+type FacebookPageOption = { id: string; name: string; tasks: string[] };
+type FacebookSelection = { channelId: string; sessionId: string; pages: FacebookPageOption[] };
 
 const api = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api';
 const labels: Record<string, string> = { TIKTOK_SHOP: 'TikTok Shop', SHOPEE: 'Shopee', FACEBOOK_MESSENGER: 'Facebook Messenger', OFFLINE_STORE: 'Cửa hàng POS', WEBSITE: 'Website', WHOLESALE: 'Bán sỉ' };
 const tokenLabels: Record<string, string> = { VALID: 'Token hợp lệ', EXPIRING: 'Sắp hết hạn', EXPIRED: 'Đã hết hạn', REAUTH_REQUIRED: 'Cần cấp quyền lại', UNKNOWN: 'Chưa có hạn token', MISSING: 'Thiếu token', NOT_APPLICABLE: 'Không áp dụng' };
 const marketplace = (type: string) => ['TIKTOK_SHOP', 'SHOPEE'].includes(type);
+const oauthCapable = (type: string) => ['TIKTOK_SHOP', 'SHOPEE', 'FACEBOOK_MESSENGER'].includes(type);
 const datetimeLocal = (value?: string) => value ? new Date(new Date(value).getTime() - new Date(value).getTimezoneOffset() * 60_000).toISOString().slice(0, 16) : '';
 
 export default function ChannelsPage() {
@@ -58,6 +62,7 @@ export default function ChannelsPage() {
   const [syncing, setSyncing] = useState('');
   const [saving, setSaving] = useState(false);
   const [configuring, setConfiguring] = useState<Channel | null>(null);
+  const [facebookSelection, setFacebookSelection] = useState<FacebookSelection | null>(null);
 
   const load = useCallback(async () => {
     const token = localStorage.getItem('erp_access_token');
@@ -74,10 +79,39 @@ export default function ChannelsPage() {
   useEffect(() => { load().catch((reason) => setError(reason.message)); }, [load]);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('oauth') === 'success') setNotice('Seller đã cấp quyền thành công; token và Shop ID đã được lưu mã hóa.');
-    if (params.get('oauth') === 'error') setError(params.get('message') || 'Không thể hoàn tất cấp quyền seller.');
-    if (params.has('oauth')) window.history.replaceState({}, '', window.location.pathname);
-  }, []);
+    const oauth = params.get('oauth');
+    const notifyOpener = (status: 'success' | 'error', message: string) => {
+      if (!window.opener) return false;
+      window.opener.postMessage({ type: 'QLSELLER_OAUTH', status, message }, window.location.origin);
+      window.close();
+      return true;
+    };
+    if (oauth === 'success') {
+      const message = 'Đã cấp quyền thành công; tài khoản và token đã được lưu mã hóa.';
+      if (!notifyOpener('success', message)) { setNotice(message); load().catch((reason) => setError(reason.message)); }
+    } else if (oauth === 'error') {
+      const message = params.get('message') || 'Không thể hoàn tất cấp quyền.';
+      if (!notifyOpener('error', message)) setError(message);
+    } else if (oauth === 'select_page') {
+      const channelId = params.get('channelId') ?? '';
+      const sessionId = params.get('sessionId') ?? '';
+      fetch(`${api}/channels/${channelId}/oauth/facebook/pages/${sessionId}`, { headers: { Authorization: `Bearer ${localStorage.getItem('erp_access_token')}` } })
+        .then(async (response) => { const payload = await response.json(); if (!response.ok) throw new Error(payload.message ?? 'Không thể đọc danh sách Page'); return payload; })
+        .then((payload) => setFacebookSelection({ channelId, sessionId, pages: payload.pages }))
+        .catch((reason) => setError(reason instanceof Error ? reason.message : 'Không thể đọc danh sách Page Facebook'));
+    }
+    if (oauth && oauth !== 'select_page') window.history.replaceState({}, '', window.location.pathname);
+  }, [load]);
+  useEffect(() => {
+    const receiveOAuth = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin || event.data?.type !== 'QLSELLER_OAUTH') return;
+      setSaving(false); setConfiguring(null);
+      if (event.data.status === 'success') { setNotice(event.data.message); setError(''); load().catch((reason) => setError(reason.message)); }
+      else setError(event.data.message || 'Không thể hoàn tất cấp quyền.');
+    };
+    window.addEventListener('message', receiveOAuth);
+    return () => window.removeEventListener('message', receiveOAuth);
+  }, [load]);
   const canManage = permissions.includes('*') || permissions.includes('channels.manage');
   const canSync = permissions.includes('*') || permissions.includes('channels.sync');
 
@@ -167,12 +201,32 @@ export default function ChannelsPage() {
 
   async function startOAuth(channel: Channel) {
     setSaving(true); setError(''); setNotice('');
+    const popup = window.open('about:blank', 'qlseller-oauth', 'popup=yes,width=680,height=760,left=180,top=80');
     try {
       const response = await fetch(`${api}/channels/${channel.id}/oauth/start`, { method: 'POST', headers: { Authorization: `Bearer ${localStorage.getItem('erp_access_token')}` } });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.message ?? 'Không thể khởi tạo OAuth');
-      window.location.assign(payload.authorizationUrl);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Không thể khởi tạo OAuth'); setSaving(false); }
+      if (popup) {
+        popup.location.assign(payload.authorizationUrl);
+        setNotice(`Cửa sổ đăng nhập ${labels[channel.type] ?? channel.type} đã được mở.`);
+        setConfiguring(null); setSaving(false);
+        const watcher = window.setInterval(() => { if (popup.closed) { window.clearInterval(watcher); setSaving(false); } }, 800);
+      } else window.location.assign(payload.authorizationUrl);
+    } catch (reason) { popup?.close(); setError(reason instanceof Error ? reason.message : 'Không thể khởi tạo OAuth'); setSaving(false); }
+  }
+
+  async function selectFacebookPage(page: FacebookPageOption) {
+    if (!facebookSelection) return;
+    setSaving(true); setError('');
+    try {
+      const response = await fetch(`${api}/channels/${facebookSelection.channelId}/oauth/facebook/select`, { method: 'POST', headers: { Authorization: `Bearer ${localStorage.getItem('erp_access_token')}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: facebookSelection.sessionId, pageId: page.id }) });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(Array.isArray(payload.message) ? payload.message[0] : payload.message ?? 'Không thể liên kết Page');
+      const message = `Đã liên kết Facebook Page ${payload.page.name}.`;
+      if (window.opener) { window.opener.postMessage({ type: 'QLSELLER_OAUTH', status: 'success', message }, window.location.origin); window.close(); return; }
+      setFacebookSelection(null); setNotice(message); window.history.replaceState({}, '', window.location.pathname); await load();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Không thể liên kết Page Facebook'); }
+    finally { setSaving(false); }
   }
 
   const metrics = useMemo(() => ({
@@ -206,7 +260,7 @@ export default function ChannelsPage() {
         <div className="connection-fields">
           <label>Môi trường<select name="environment" defaultValue={configuring.connection.environment}><option value="PRODUCTION">Production</option><option value="SANDBOX">Sandbox</option></select></label>
           <label>{configuring.type === 'SHOPEE' ? 'Partner ID' : 'App / Client ID'}<input name="clientId" defaultValue={configuring.connection.clientId} required /></label>
-          <label>{configuring.type === 'SHOPEE' ? 'Shop ID' : configuring.type === 'FACEBOOK_MESSENGER' ? 'Page ID' : 'Shop Cipher / Cửa hàng ID'}<input name="accountIdentifier" defaultValue={configuring.connection.accountIdentifier} required={!marketplace(configuring.type)} placeholder={marketplace(configuring.type) ? 'OAuth sẽ tự điền' : ''} /></label>
+          <label>{configuring.type === 'SHOPEE' ? 'Shop ID' : configuring.type === 'FACEBOOK_MESSENGER' ? 'Page ID' : 'Shop Cipher / Cửa hàng ID'}<input name="accountIdentifier" defaultValue={configuring.connection.accountIdentifier} required={!oauthCapable(configuring.type)} placeholder={oauthCapable(configuring.type) ? 'Đăng nhập OAuth sẽ tự điền' : ''} /></label>
           {configuring.type === 'TIKTOK_SHOP' && <label className="scope-field">TikTok Service ID hoặc Authorization URL<input name="authorizationIdentifier" defaultValue={configuring.connection.authorizationIdentifier} placeholder="https://services.tiktokshop.com/open/authorize?service_id=..." required /></label>}
           <label>API Base URL (tùy chọn)<input name="apiBaseUrl" defaultValue={configuring.connection.apiBaseUrl} /></label>
           <label>{configuring.type === 'SHOPEE' ? 'Partner Key' : 'Client Secret'}<input name="clientSecret" type="password" placeholder={configuring.connection.hasClientSecret ? 'Đã lưu ••••••••' : 'Nhập khóa bí mật'} /></label>
@@ -221,10 +275,11 @@ export default function ChannelsPage() {
           </>}
         </div>
         <label className="webhook-url">Webhook URL dự kiến (dùng khi bật connector)<input value={configuring.connection.webhookUrl ?? ''} readOnly /></label>
-        {marketplace(configuring.type) && <label className="webhook-url">OAuth Callback URL đăng ký trên nền tảng<input value={configuring.connection.oauthCallbackUrl ?? ''} readOnly /></label>}
+        {oauthCapable(configuring.type) && <label className="webhook-url">OAuth Callback URL đăng ký trên nền tảng<input value={configuring.connection.oauthCallbackUrl ?? ''} readOnly /></label>}
         <div className="sync-options"><label><input type="checkbox" name="orderSyncEnabled" defaultChecked={configuring.connection.orderSyncEnabled || marketplace(configuring.type)} /> Đồng bộ đơn hàng</label><label><input type="checkbox" name="inventorySyncEnabled" defaultChecked={configuring.connection.inventorySyncEnabled || marketplace(configuring.type)} /> Đồng bộ tồn kho</label><label><input type="checkbox" name="chatSyncEnabled" defaultChecked={configuring.connection.chatSyncEnabled || configuring.type === 'FACEBOOK_MESSENGER'} /> Đồng bộ tin nhắn</label></div>
-        <div className="modal-actions">{marketplace(configuring.type) && configuring.connection.hasClientSecret && <button type="button" className="refresh" disabled={saving} onClick={() => startOAuth(configuring)}>Kết nối OAuth</button>}{marketplace(configuring.type) && configuring.connection.hasRefreshToken && <button type="button" className="refresh" disabled={saving} onClick={() => refreshToken(configuring)}>Làm mới token</button>}<button type="button" className="check" disabled={saving} onClick={() => checkConnection(configuring)}>Kiểm tra độ đầy đủ</button><button disabled={saving}>{saving ? 'Đang lưu...' : 'Lưu cấu hình mã hóa'}</button></div>
+        <div className="modal-actions">{oauthCapable(configuring.type) && configuring.connection.hasClientSecret && <button type="button" className="refresh" disabled={saving} onClick={() => startOAuth(configuring)}>{configuring.type === 'FACEBOOK_MESSENGER' ? 'Đăng nhập Facebook' : 'Kết nối OAuth'}</button>}{marketplace(configuring.type) && configuring.connection.hasRefreshToken && <button type="button" className="refresh" disabled={saving} onClick={() => refreshToken(configuring)}>Làm mới token</button>}<button type="button" className="check" disabled={saving} onClick={() => checkConnection(configuring)}>Kiểm tra độ đầy đủ</button><button disabled={saving}>{saving ? 'Đang lưu...' : 'Lưu cấu hình mã hóa'}</button></div>
       </form>
     </div>}
+    {facebookSelection && <div className="connection-backdrop"><section className="facebook-page-picker"><div className="connection-heading"><div><p>FACEBOOK OAUTH</p><h2>Chọn Page cần liên kết</h2><span>Tài khoản Facebook đang quản lý nhiều Page. Chọn đúng Page dùng để chăm sóc khách hàng.</span></div></div><div>{facebookSelection.pages.map((page) => <button key={page.id} disabled={saving} onClick={() => selectFacebookPage(page)}><i>f</i><span><b>{page.name}</b><small>Page ID: {page.id}</small></span><em>Liên kết</em></button>)}</div></section></div>}
   </main>;
 }
